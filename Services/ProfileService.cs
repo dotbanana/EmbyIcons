@@ -1,4 +1,5 @@
 ﻿using EmbyIcons.Api;
+using EmbyIcons.Configuration;
 using MediaBrowser.Model.Services;
 using System.Threading.Tasks;
 

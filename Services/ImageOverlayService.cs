@@ -1,4 +1,6 @@
-﻿using EmbyIcons.Helpers;
+﻿using EmbyIcons.Caching;
+using EmbyIcons.Configuration;
+using EmbyIcons.Helpers;
 using EmbyIcons.Models;
 using MediaBrowser.Model.Logging;
 using SkiaSharp;
@@ -53,14 +55,14 @@ namespace EmbyIcons.Services
         public async Task<Stream> ApplyOverlaysAsync(SKBitmap sourceBitmap, OverlayData data, ProfileSettings profileOptions, PluginOptions globalOptions, CancellationToken cancellationToken)
         {
             var outputStream = new MemoryStream();
-            await ApplyOverlaysToStreamAsync(sourceBitmap, data, profileOptions, globalOptions, outputStream, cancellationToken, null);
+            await ApplyOverlaysToStreamAsync(sourceBitmap, data, profileOptions, globalOptions, outputStream, cancellationToken, null).ConfigureAwait(false);
             outputStream.Position = 0;
             return outputStream;
         }
 
         public async Task ApplyOverlaysToStreamAsync(SKBitmap sourceBitmap, OverlayData data, ProfileSettings profileOptions, PluginOptions globalOptions, Stream outputStream, CancellationToken cancellationToken, Dictionary<IconCacheManager.IconType, List<SKImage>>? injectedIcons)
         {
-            await _iconCache.InitializeAsync(globalOptions.IconsFolder, cancellationToken);
+            await _iconCache.InitializeAsync(globalOptions.IconsFolder, cancellationToken).ConfigureAwait(false);
 
             using var surface = SKSurface.Create(new SKImageInfo(sourceBitmap.Width, sourceBitmap.Height));
             var canvas = surface.Canvas;
@@ -75,9 +77,9 @@ namespace EmbyIcons.Services
 
             var drawingContext = new DrawingContext(canvas, paint, textPaint, profileOptions, iconSize, edgePadding, interIconPadding, sourceBitmap.Width, sourceBitmap.Height);
 
-            var iconGroups = await CreateIconGroups(data, profileOptions, globalOptions, cancellationToken, injectedIcons);
-            var ratingInfo = await CreateRatingInfo(data, profileOptions, globalOptions, cancellationToken);
-            var rottenInfo = await CreateRottenRatingInfo(data, profileOptions, globalOptions, cancellationToken);
+            var iconGroups = await CreateIconGroups(data, profileOptions, globalOptions, cancellationToken, injectedIcons).ConfigureAwait(false);
+            var ratingInfo = await CreateRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
+            var rottenInfo = await CreateRottenRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
 
             var overlaysByCorner = new Dictionary<IconAlignment, List<IOverlayInfo>>();
             foreach (var group in iconGroups)
@@ -121,20 +123,27 @@ namespace EmbyIcons.Services
                 {
                     foreach (var img in group.Icons)
                     {
-                        try { img.Dispose(); } catch { }
+                        try { img?.Dispose(); } catch (Exception disposeEx) 
+                        { 
+                            if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                                _logger?.Debug($"[EmbyIcons] Error disposing icon: {disposeEx.Message}");
+                        }
                     }
                 }
 
-                if (ratingInfo != null && ratingInfo.Icon != null)
+                if (ratingInfo?.Icon != null)
                 {
                     try { ratingInfo.Icon.Dispose(); } catch { }
                 }
-                if (rottenInfo != null && rottenInfo.Icon != null)
+                if (rottenInfo?.Icon != null)
                 {
                     try { rottenInfo.Icon.Dispose(); } catch { }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.ErrorException("[EmbyIcons] Error during icon cleanup.", ex);
+            }
         }
 
         private async Task<RatingOverlayInfo?> CreateRottenRatingInfo(OverlayData data, ProfileSettings profileOptions, PluginOptions options, CancellationToken cancellationToken)
@@ -144,19 +153,12 @@ namespace EmbyIcons.Services
                 return null;
             }
 
+            const float RottenThreshold = 60f;
             float percent = data.RottenTomatoesRating.Value;
 
-            string iconKeyToRequest;
-            if (percent < 60f)
-            {
-                iconKeyToRequest = "t.splat";
-            }
-            else
-            {
-                iconKeyToRequest = "t.tomato";
-            }
+            string iconKeyToRequest = percent < RottenThreshold ? StringConstants.SplatIcon : StringConstants.TomatoIcon;
 
-            var ratingIcon = await _iconCache.GetIconAsync(iconKeyToRequest, IconCacheManager.IconType.CommunityRating, options, cancellationToken);
+            var ratingIcon = await _iconCache.GetIconAsync(iconKeyToRequest, IconCacheManager.IconType.CommunityRating, options, cancellationToken).ConfigureAwait(false);
 
 
             return new RatingOverlayInfo(
@@ -173,7 +175,7 @@ namespace EmbyIcons.Services
 
         private void DrawCorner(List<IOverlayInfo> overlays, IconAlignment alignment, DrawingContext context)
         {
-            var allOverlays = overlays.OrderBy(o => o.Priority).ToList();
+            var allOverlays = overlays.OrderBy(o => o.Priority);
 
             var horizontalDrawableItems = new List<object>();
             var verticalDrawableItems = new List<IOverlayInfo>();
@@ -455,7 +457,7 @@ namespace EmbyIcons.Services
 
         private async Task<List<OverlayGroupInfo>> CreateIconGroups(OverlayData data, ProfileSettings profileOptions, PluginOptions globalOptions, CancellationToken cancellationToken, Dictionary<IconCacheManager.IconType, List<SKImage>>? injectedIcons)
         {
-            var groups = new List<OverlayGroupInfo>(8);
+            var groups = new List<OverlayGroupInfo>(_groupDefinitions.Count);
 
             foreach (var def in _groupDefinitions)
             {
@@ -483,12 +485,32 @@ namespace EmbyIcons.Services
             }
             else
             {
-                foreach (var name in names)
+                // Load icons in parallel for better performance
+                var namesList = names.ToList();
+                if (namesList.Count > 1)
                 {
-                    var icon = await _iconCache.GetIconAsync(name, type, options, cancellationToken);
-                    if (icon != null)
+                    var tasks = namesList.Select(name => 
+                        _iconCache.GetIconAsync(name, type, options, cancellationToken)).ToList();
+                    var icons = await Task.WhenAll(tasks).ConfigureAwait(false);
+                    
+                    foreach (var icon in icons)
                     {
-                        imgs.Add(icon);
+                        if (icon != null)
+                        {
+                            imgs.Add(icon);
+                        }
+                    }
+                }
+                else
+                {
+                    // Single icon - no need for parallel loading
+                    foreach (var name in namesList)
+                    {
+                        var icon = await _iconCache.GetIconAsync(name, type, options, cancellationToken).ConfigureAwait(false);
+                        if (icon != null)
+                        {
+                            imgs.Add(icon);
+                        }
                     }
                 }
             }
@@ -506,8 +528,7 @@ namespace EmbyIcons.Services
                 return null;
             }
 
-            const string iconKeyToRequest = "imdb";
-            var ratingIcon = await _iconCache.GetIconAsync(iconKeyToRequest, IconCacheManager.IconType.CommunityRating, options, cancellationToken);
+            var ratingIcon = await _iconCache.GetIconAsync(StringConstants.ImdbIcon, IconCacheManager.IconType.CommunityRating, options, cancellationToken).ConfigureAwait(false);
 
             return new RatingOverlayInfo(
                 profileOptions.CommunityScoreIconAlignment,

@@ -1,4 +1,5 @@
 ﻿using EmbyIcons.Api;
+using EmbyIcons.Caching;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Services;
 using System.IO;
@@ -45,7 +46,7 @@ namespace EmbyIcons.Services
                     .Any(f =>
                     {
                         var ext = Path.GetExtension(f.FullName).ToLowerInvariant();
-                        return Helpers.IconCacheManager.SupportedCustomIconExtensions.Contains(ext);
+                        return Caching.IconCacheManager.SupportedCustomIconExtensions.Contains(ext);
                     });
             }
 

@@ -5,6 +5,7 @@
 
             <div data-role="controlgroup" data-type="horizontal" class="localnav">
                 <a is="emby-linkbutton" class="nav-button ui-btn-active" href="#" data-role="button" data-target="settingsPage">Settings</a>
+                <a is="emby-linkbutton" class="nav-button" href="#" data-role="button" data-target="advancedPage">Advanced</a>
                 <a is="emby-linkbutton" class="nav-button" href="#" data-role="button" data-target="iconManagerPage">Icon Manager</a>
                 <a is="emby-linkbutton" class="nav-button" href="#" data-role="button" data-target="troubleshooterPage">Troubleshooter</a>
                 <a is="emby-linkbutton" class="nav-button" href="#" data-role="button" data-target="readmePage">Readme</a>
@@ -141,7 +142,7 @@
                         </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label><input is="emby-checkbox" type="checkbox" data-profile-key="UseSeriesLiteMode" /><span>Use Lite Mode for TV show scans</span></label>
-                            <div class="fieldDescription checkboxFieldDescription">Faster, but less accurate. Only checks the first episode to determine icons for the entire series.</div>
+                            <div class="fieldDescription checkboxFieldDescription">Faster, but less accurate. Only checks the first episode of the series (S01E01) to determine icons for all seasons and the series itself.</div>
                         </div>
 
                         <div class="flex align-items-center" style="margin: 3em 0 .5em;">
@@ -308,6 +309,83 @@
                         <div class="paper-card" style="padding: 1.5em;">
                             <div class="inputContainer">
                                 <input is="emby-input" type="number" label="Icon Size (% of poster height):" min="1" max="100" data-profile-key="IconSize" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 2em;">
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="advancedPage" class="hide" style="margin-top: 2em;">
+                <form class="embyIconsForm">
+                    <div class="flex align-items-center" style="margin: 2em 0 .5em;">
+                        <h2 style="margin: 0;">Advanced Settings</h2>
+                    </div>
+                    <p class="fieldDescription" style="margin-bottom: 1.5em;">
+                        <strong>Warning:</strong> These are advanced settings that affect performance and memory usage. 
+                        Only modify these if you understand the implications. Default values are recommended for most users.
+                    </p>
+
+                    <div class="paper-card" style="padding: 1.5em;">
+                        <h3 style="margin-top: 0;">Cache Sizes</h3>
+                        <p class="fieldDescription">Larger caches use more memory but improve performance by reducing processing overhead.</p>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Max Episode Cache Size:" min="100" max="50000" data-config-key="MaxEpisodeCacheSize" />
+                            <div class="fieldDescription">Maximum number of episode icon data entries to cache. Default: 2000.</div>
+                        </div>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Max Series Cache Size:" min="50" max="10000" data-config-key="MaxSeriesCacheSize" />
+                            <div class="fieldDescription">Maximum number of series aggregation results to cache. Default: 500.</div>
+                        </div>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Max Item-to-Profile Cache Size:" min="1000" max="100000" data-config-key="MaxItemToProfileCacheSize" />
+                            <div class="fieldDescription">Maximum number of item-to-profile mappings to cache. Default: 20000.</div>
+                        </div>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Max Collection-to-Profile Cache Size:" min="100" max="50000" data-config-key="MaxCollectionToProfileCacheSize" />
+                            <div class="fieldDescription">Maximum number of collection-to-profile mappings to cache. Default: 5000.</div>
+                        </div>
+                    </div>
+
+                    <div class="paper-card" style="padding: 1.5em; margin-top: 2em;">
+                        <h3 style="margin-top: 0;">Cache Timing</h3>
+                        <p class="fieldDescription">Adjust how long data stays cached and how often caches are cleaned up.</p>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Episode Cache Expiration (hours):" min="1" max="168" data-config-key="EpisodeCacheSlidingExpirationHours" />
+                            <div class="fieldDescription">How long to keep episode icon data cached before expiring. Default: 6 hours.</div>
+                        </div>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Cache Pruning Interval (hours):" min="1" max="168" data-config-key="CachePruningIntervalHours" />
+                            <div class="fieldDescription">How often to remove old series aggregation cache entries. Default: 6 hours.</div>
+                        </div>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Cache Maintenance Interval (hours):" min="0.5" max="24" step="0.5" data-config-key="CacheMaintenanceIntervalHours" />
+                            <div class="fieldDescription">How often to compact memory caches. Default: 1 hour.</div>
+                        </div>
+                    </div>
+
+                    <div class="paper-card" style="padding: 1.5em; margin-top: 2em;">
+                        <h3 style="margin-top: 0;">Performance</h3>
+                        <p class="fieldDescription">Control how the plugin utilizes system resources during image processing.</p>
+                        
+                        <div class="inputContainer" style="margin-top: 1.5em;">
+                            <input is="emby-input" type="number" label="Global Concurrency Multiplier:" min="0.1" max="2.0" step="0.05" data-config-key="GlobalConcurrencyMultiplier" />
+                            <div class="fieldDescription">
+                                Multiplier for processor count to determine max concurrent operations. Default: 0.75.<br>
+                                Lower values (0.25-0.5) reduce CPU/memory usage but slow down processing.<br>
+                                Higher values (1.0-2.0) speed up bulk operations but use more resources.
                             </div>
                         </div>
                     </div>

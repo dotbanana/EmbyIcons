@@ -9,8 +9,30 @@ namespace EmbyIcons
     public partial class EmbyIconsEnhancer
     {
         internal static MemoryCache? _episodeIconCache;
+        private static readonly object _episodeCacheInitLock = new object();
 
-        private const int MaxEpisodeCacheSize = 2000;
+        private static int MaxEpisodeCacheSize => Plugin.Instance?.Configuration.MaxEpisodeCacheSize ?? 2000;
+        internal static int EpisodeCacheSlidingExpirationHours => Plugin.Instance?.Configuration.EpisodeCacheSlidingExpirationHours ?? 6;
+
+        /// <summary>
+        /// Ensures the episode cache is initialized. Safe to call multiple times.
+        /// </summary>
+        internal static void EnsureEpisodeCacheInitialized()
+        {
+            if (_episodeIconCache == null)
+            {
+                lock (_episodeCacheInitLock)
+                {
+                    if (_episodeIconCache == null)
+                    {
+                        _episodeIconCache = new MemoryCache(new MemoryCacheOptions
+                        {
+                            SizeLimit = MaxEpisodeCacheSize
+                        });
+                    }
+                }
+            }
+        }
 
         public record EpisodeIconInfo
         {
@@ -33,10 +55,30 @@ namespace EmbyIcons
         {
             if (episodeId == Guid.Empty) return;
 
+            EnsureEpisodeCacheInitialized();
             _episodeIconCache?.Remove(episodeId);
             if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
             {
                 _logger.Debug($"[EmbyIcons] Event handler cleared icon info cache for item ID: {episodeId}");
+            }
+        }
+
+        public void ClearAllEpisodeCaches()
+        {
+            var oldCache = _episodeIconCache;
+            _episodeIconCache = new MemoryCache(new MemoryCacheOptions
+            {
+                SizeLimit = MaxEpisodeCacheSize
+            });
+            
+            if (oldCache != null)
+            {
+                try { oldCache.Dispose(); } 
+                catch (Exception ex) 
+                { 
+                    if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                        Plugin.Instance?.Logger.Debug($"[EmbyIcons] Error disposing old episode cache: {ex.Message}"); 
+                }
             }
         }
 

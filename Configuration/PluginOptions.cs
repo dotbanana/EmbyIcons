@@ -1,10 +1,10 @@
-using EmbyIcons;
+using EmbyIcons.Configuration;
 using MediaBrowser.Model.Plugins;
 using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace EmbyIcons
+namespace EmbyIcons.Configuration
 {
     public class LibraryMapping
     {
@@ -49,6 +49,59 @@ namespace EmbyIcons
 
         public List<IconProfile> Profiles { get; set; } = new List<IconProfile>();
         public List<LibraryMapping> LibraryProfileMappings { get; set; } = new List<LibraryMapping>();
+
+        #region Advanced Settings
+        // Advanced settings - only modify if you understand the implications
+        
+        /// <summary>
+        /// Maximum number of episode icon data entries to cache. Default: 2000.
+        /// Higher values use more memory but reduce processing overhead.
+        /// </summary>
+        public int MaxEpisodeCacheSize { get; set; } = 2000;
+        
+        /// <summary>
+        /// Maximum number of series aggregation results to cache. Default: 500.
+        /// Series aggregation is expensive, so caching improves performance.
+        /// </summary>
+        public int MaxSeriesCacheSize { get; set; } = 500;
+        
+        /// <summary>
+        /// Maximum number of item-to-profile mappings to cache. Default: 20000.
+        /// This cache speeds up profile lookups for library items.
+        /// </summary>
+        public int MaxItemToProfileCacheSize { get; set; } = 20000;
+        
+        /// <summary>
+        /// Maximum number of collection-to-profile mappings to cache. Default: 5000.
+        /// </summary>
+        public int MaxCollectionToProfileCacheSize { get; set; } = 5000;
+        
+        /// <summary>
+        /// How long (in hours) to keep episode icon data cached before expiring. Default: 6.
+        /// Longer durations reduce processing but may show stale data after metadata changes.
+        /// </summary>
+        public int EpisodeCacheSlidingExpirationHours { get; set; } = 6;
+        
+        /// <summary>
+        /// How often (in hours) to prune old series aggregation cache entries. Default: 6.
+        /// Entries older than 7 days are removed during pruning.
+        /// </summary>
+        public int CachePruningIntervalHours { get; set; } = 6;
+        
+        /// <summary>
+        /// How often (in hours) to compact memory caches. Default: 1.
+        /// Compaction reduces memory fragmentation.
+        /// </summary>
+        public int CacheMaintenanceIntervalHours { get; set; } = 1;
+        
+        /// <summary>
+        /// Multiplier for processor count to determine max concurrent image processing operations. Default: 0.75.
+        /// Lower values reduce CPU/memory usage but slow down bulk operations.
+        /// Range: 0.1 to 2.0 recommended.
+        /// </summary>
+        public double GlobalConcurrencyMultiplier { get; set; } = 0.75; // Multiplied by processor count
+        
+        #endregion
 
         #region Obsolete properties for migration
         [Obsolete]

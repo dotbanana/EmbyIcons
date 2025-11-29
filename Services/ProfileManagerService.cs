@@ -1,4 +1,5 @@
-﻿using EmbyIcons.Helpers;
+﻿using EmbyIcons.Configuration;
+using EmbyIcons.Helpers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -19,10 +20,9 @@ namespace EmbyIcons.Services
 
         private Lazy<Trie<string>> _libraryPathTrieLazy;
 
-        private const int MaxItemToProfileCacheSize = 20000;
-        private MemoryCache _itemToProfileIdCache = new(new MemoryCacheOptions { SizeLimit = MaxItemToProfileCacheSize });
-    private MemoryCache _collectionToProfileIdCache = new(new MemoryCacheOptions { SizeLimit = 5000 });
-    private Timer? _cacheMaintenanceTimer;
+        private MemoryCache _itemToProfileIdCache;
+        private MemoryCache _collectionToProfileIdCache;
+        private Timer? _cacheMaintenanceTimer;
 
         public ProfileManagerService(ILibraryManager libraryManager, ILogger logger, PluginOptions configuration)
         {
@@ -30,19 +30,29 @@ namespace EmbyIcons.Services
             _logger = logger;
             _configuration = configuration;
             _libraryPathTrieLazy = new Lazy<Trie<string>>(CreateLibraryPathTrie);
-            _cacheMaintenanceTimer = new Timer(_ => CompactCaches(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+            
+            var maxItemCacheSize = Math.Max(1000, configuration.MaxItemToProfileCacheSize);
+            var maxCollectionCacheSize = Math.Max(100, configuration.MaxCollectionToProfileCacheSize);
+            _itemToProfileIdCache = new(new MemoryCacheOptions { SizeLimit = maxItemCacheSize });
+            _collectionToProfileIdCache = new(new MemoryCacheOptions { SizeLimit = maxCollectionCacheSize });
+            
+            var maintenanceInterval = TimeSpan.FromHours(Math.Max(0.5, configuration.CacheMaintenanceIntervalHours));
+            _cacheMaintenanceTimer = new Timer(_ => CompactCaches(), null, maintenanceInterval, maintenanceInterval);
         }
 
         public void InvalidateLibraryCache()
         {
             _libraryPathTrieLazy = new Lazy<Trie<string>>(CreateLibraryPathTrie);
 
+            var maxItemCacheSize = Math.Max(1000, _configuration.MaxItemToProfileCacheSize);
+            var maxCollectionCacheSize = Math.Max(100, _configuration.MaxCollectionToProfileCacheSize);
+            
             var oldCache = _itemToProfileIdCache;
-            _itemToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = MaxItemToProfileCacheSize });
+            _itemToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = maxItemCacheSize });
             oldCache.Dispose();
 
             var oldCollectionCache = _collectionToProfileIdCache;
-            _collectionToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = 5000 });
+            _collectionToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = maxCollectionCacheSize });
             oldCollectionCache.Dispose();
 
             _logger.Info("[EmbyIcons] Library path and item profile caches have been invalidated.");

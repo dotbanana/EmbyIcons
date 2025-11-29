@@ -1,4 +1,5 @@
-﻿using EmbyIcons.Api;
+﻿﻿using EmbyIcons.Api;
+using EmbyIcons.Configuration;
 using EmbyIcons.Helpers;
 using EmbyIcons.Services;
 using MediaBrowser.Common;
@@ -27,6 +28,9 @@ using System.Threading.Tasks;
 
 namespace EmbyIcons
 {
+    /// <summary>
+    /// Main plugin class for EmbyIcons. Provides icon overlays on media posters based on video/audio attributes.
+    /// </summary>
     public class Plugin : BasePlugin<PluginOptions>, IHasWebPages, IHasThumbImage, IDisposable
     {
         private readonly IApplicationHost _appHost;
@@ -41,8 +45,8 @@ namespace EmbyIcons
         private ConfigurationMonitor? _configMonitor;
 
         private bool _migrationPerformed = false;
-        private static bool _migrationAttempted = false; 
-        private static readonly object _migrationLock = new object(); 
+        private static bool _migrationAttempted = false;
+        private static readonly object _migrationLock = new object();
 
 
         public static Plugin? Instance { get; private set; }
@@ -51,7 +55,33 @@ namespace EmbyIcons
 
         public string ConfigurationVersion => Configuration.PersistedVersion;
 
-        public EmbyIconsEnhancer Enhancer => _enhancer ??= new EmbyIconsEnhancer(_libraryManager, _logManager);
+        public EmbyIconsEnhancer Enhancer
+        {
+            get
+            {
+                if (_enhancer == null)
+                {
+                    _enhancer = new EmbyIconsEnhancer(_libraryManager, _logManager, _fileSystem);
+                    EnsurePruningTimerInitialized();
+                }
+                return _enhancer;
+            }
+        }
+
+        private void EnsurePruningTimerInitialized()
+        {
+            if (_pruningTimer == null)
+            {
+                var pruningInterval = TimeSpan.FromHours(Math.Max(1, Configuration.CachePruningIntervalHours));
+                _pruningTimer = new Timer(
+                    _ => Enhancer.PruneSeriesAggregationCache(),
+                    null,
+                    TimeSpan.FromHours(1),
+                    pruningInterval
+                );
+            }
+        }
+
         private ProfileManagerService ProfileManager => _profileManager ??= new ProfileManagerService(_libraryManager, _logger, Configuration);
         private ConfigurationMonitor ConfigMonitor => _configMonitor ??= new ConfigurationMonitor(_logger, _libraryManager, _fileSystem);
 
@@ -77,12 +107,8 @@ namespace EmbyIcons
             _logger.Debug("EmbyIcons plugin initialized.");
             SubscribeLibraryEvents();
 
-            _pruningTimer = new Timer(
-                _ => Enhancer.PruneSeriesAggregationCache(),
-                null,
-                TimeSpan.FromHours(1),
-                TimeSpan.FromHours(6)
-            );
+            // Defer timer initialization to after base constructor completes
+            // Timer will be initialized when Configuration is first accessed
         }
 
         private void EnsureConfigurationMigrated()
@@ -199,6 +225,13 @@ namespace EmbyIcons
                 {
                     _logger.ErrorException("[EmbyIcons] A critical error occurred during background configuration migration.", ex);
                 }
+                finally
+                {
+                    lock (_migrationLock)
+                    {
+                        _migrationAttempted = true;
+                    }
+                }
             });
         }
 
@@ -245,10 +278,13 @@ namespace EmbyIcons
 
         private void LibraryManagerOnItemChanged(object? sender, ItemChangeEventArgs e)
         {
-            var enhancer = Enhancer;
-
+            if (e?.Item == null) return;
+            
             try
             {
+                // Cache the enhancer reference to avoid repeated property access
+                var enhancer = Enhancer;
+                
                 if (e.Item is Folder && e.Parent == _libraryManager.RootFolder)
                 {
                     ProfileManager.InvalidateLibraryCache();
@@ -265,14 +301,27 @@ namespace EmbyIcons
                                  ?? (e.Item as Season)?.Series
                                  ?? e.Item as Series;
 
+                // Also get the season if this is an episode change
+                var seasonToClear = (e.Item as Episode)?.Season;
+
                 if (dateModifiedChanged && e.Item is Episode episode && episode.Series != null)
                 {
-                    _logger.Debug($"[EmbyIcons] DateModified change detected for episode '{episode.Name}', clearing series cache.");
+                    if (Configuration?.EnableDebugLogging ?? false)
+                        _logger.Debug($"[EmbyIcons] DateModified change detected for episode '{episode.Name}', clearing series and season caches.");
+                }
+
+                // Clear season cache if episode changed
+                if (seasonToClear != null && seasonToClear.Id != Guid.Empty)
+                {
+                    if (Configuration?.EnableDebugLogging ?? false)
+                        _logger.Debug($"[EmbyIcons] Change detected for '{e.Item.Name}'; clearing aggregation cache for season '{seasonToClear.Name}' ({seasonToClear.Id}).");
+                    enhancer.ClearSeriesAggregationCache(seasonToClear.Id);
                 }
 
                 if (seriesToClear != null && seriesToClear.Id != Guid.Empty)
                 {
-                    _logger.Debug($"[EmbyIcons] Change detected for '{e.Item.Name}'; clearing aggregation cache for parent series '{seriesToClear.Name}' ({seriesToClear.Id}).");
+                    if (Configuration?.EnableDebugLogging ?? false)
+                        _logger.Debug($"[EmbyIcons] Change detected for '{e.Item.Name}'; clearing aggregation cache for parent series '{seriesToClear.Name}' ({seriesToClear.Id}).");
                     enhancer.ClearSeriesAggregationCache(seriesToClear.Id);
                 }
             }
@@ -299,9 +348,11 @@ namespace EmbyIcons
                 ConfigMonitor.CheckForChangesAndTriggerRefreshes(oldOptions, newOptions);
             }
 
+            // Clear all caches to ensure settings changes take effect immediately
+            Enhancer.ClearAllItemDataCaches();
             IconManagerService.InvalidateCache();
             ProfileManager.InvalidateLibraryCache();
-            _profileManager = null; 
+            _profileManager = null;
 
             _logger.Info($"[EmbyIcons] Configuration saved. New cache-busting version is '{newOptions.PersistedVersion}'. Images will refresh as they are viewed.");
         }
@@ -329,15 +380,28 @@ namespace EmbyIcons
 
         public void Dispose()
         {
-            UnsubscribeLibraryEvents();
-            _pruningTimer?.Dispose();
-            _enhancer?.Dispose();
+            try
+            {
+                UnsubscribeLibraryEvents();
+            }
+            catch (Exception ex)
+            {
+                _logger?.ErrorException("[EmbyIcons] Error unsubscribing library events.", ex);
+            }
+            
+            try { _pruningTimer?.Dispose(); } catch { }
+            try { _enhancer?.Dispose(); } catch (Exception ex) 
+            { 
+                _logger?.ErrorException("[EmbyIcons] Error disposing enhancer.", ex);
+            }
             _enhancer = null;
+            
             try { _profileManager?.Dispose(); } catch { }
             _profileManager = null;
             _configMonitor = null;
             Instance = null;
-            _logger.Debug("EmbyIcons plugin disposed.");
+            
+            _logger?.Debug("EmbyIcons plugin disposed.");
         }
     }
 }

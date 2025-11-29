@@ -55,7 +55,7 @@
                 opacitySlider: view.querySelector('[data-profile-key="CommunityScoreBackgroundOpacity"]'),
                 opacityValue: view.querySelector('.valCommunityScoreBackgroundOpacity'),
                 ratingAppearanceControls: view.querySelector('#ratingAppearanceControls'),
-                pages: view.querySelectorAll('#settingsPage, #readmePage, #iconManagerPage, #troubleshooterPage'),
+                pages: view.querySelectorAll('#settingsPage, #advancedPage, #readmePage, #iconManagerPage, #troubleshooterPage'),
                 previewImage: view.querySelector('.previewImage'),
                 iconManagerReportContainer: view.querySelector('#iconManagerReportContainer'),
                 alignmentGrid: view.querySelector('.alignment-grid'),

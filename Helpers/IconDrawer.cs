@@ -1,4 +1,5 @@
-﻿using MediaBrowser.Controller.Entities;
+﻿using EmbyIcons.Configuration;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Entities;
 using SkiaSharp;
 using System.Collections.Generic;

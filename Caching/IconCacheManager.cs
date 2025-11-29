@@ -6,11 +6,12 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using EmbyIcons.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 using SkiaSharp;
 using MediaBrowser.Model.Logging;
 
-namespace EmbyIcons.Helpers
+namespace EmbyIcons.Caching
 {
     public class IconCacheManager : IDisposable
     {
@@ -50,7 +51,8 @@ namespace EmbyIcons.Helpers
 
             try
             {
-                _cacheMaintenanceTimer = new Timer(_ => CompactCache(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+                var maintenanceInterval = TimeSpan.FromHours(Math.Max(0.5, Plugin.Instance?.Configuration.CacheMaintenanceIntervalHours ?? 1));
+                _cacheMaintenanceTimer = new Timer(_ => CompactCache(), null, maintenanceInterval, maintenanceInterval);
             }
             catch
             {
@@ -161,24 +163,20 @@ namespace EmbyIcons.Helpers
             _iconsFolder = iconsFolder;
             _logger.Info("[EmbyIcons] Clearing all cached icon image data.");
 
+            MemoryCache? oldCache = null;
             lock (_cacheInstanceLock)
             {
-                var oldCache = _iconImageCache;
+                oldCache = _iconImageCache;
                 _iconImageCache = new MemoryCache(new MemoryCacheOptions
                 {
                     SizeLimit = _cacheSizeLimitInBytes
                 });
+            }
 
-                if (oldCache != null)
-                {
-                    try
-                    {
-                        oldCache.Compact(1.0);
-                    }
-                    catch { }
-
-                    try { oldCache.Dispose(); } catch { }
-                }
+            if (oldCache != null)
+            {
+                try { oldCache.Compact(1.0); } catch { }
+                try { oldCache.Dispose(); } catch { }
             }
 
             lock (_customKeysLock)
@@ -282,7 +280,7 @@ namespace EmbyIcons.Helpers
                 var fullPath = Path.Combine(iconsFolder, baseFileName + ext);
                 if (File.Exists(fullPath))
                 {
-                    var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+                    var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken).ConfigureAwait(false);
                     if (bytes.Length == 0) return null;
 
                     var cacheEntryOptions = new MemoryCacheEntryOptions()
@@ -328,7 +326,7 @@ namespace EmbyIcons.Helpers
             if (stream == null) return null;
 
             using var memoryStream = new MemoryStream();
-            await stream.CopyToAsync(memoryStream, cancellationToken);
+            await stream.CopyToAsync(memoryStream, cancellationToken).ConfigureAwait(false);
             var bytes = memoryStream.ToArray();
 
             var cacheEntryOptions = new MemoryCacheEntryOptions()
@@ -353,12 +351,8 @@ namespace EmbyIcons.Helpers
         {
             lock (_cacheInstanceLock)
             {
-                try
-                {
-                    try { _iconImageCache.Compact(1.0); } catch { }
-                    _iconImageCache.Dispose();
-                }
-                catch { }
+                try { _iconImageCache?.Compact(1.0); } catch { }
+                try { _iconImageCache?.Dispose(); } catch { }
             }
 
             lock (_customKeysLock)
@@ -366,6 +360,7 @@ namespace EmbyIcons.Helpers
                 _customIconKeys = null;
                 _customKeysFolder = null;
             }
+            
             try { _cacheMaintenanceTimer?.Dispose(); } catch { }
             _cacheMaintenanceTimer = null;
         }
@@ -384,7 +379,7 @@ namespace EmbyIcons.Helpers
             }
             catch (Exception ex)
             {
-                try { _logger.ErrorException("[EmbyIcons] Error during icon cache compaction.", ex); } catch { }
+                _logger?.ErrorException("[EmbyIcons] Error during icon cache compaction.", ex);
             }
         }
 

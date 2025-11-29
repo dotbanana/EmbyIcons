@@ -1,4 +1,6 @@
-﻿using EmbyIcons.Helpers;
+﻿using EmbyIcons.Caching;
+using EmbyIcons.Configuration;
+using EmbyIcons.Helpers;
 using EmbyIcons.Models;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -20,21 +22,39 @@ namespace EmbyIcons.Services
     {
         private readonly EmbyIconsEnhancer _enhancer;
         private readonly ILibraryManager _libraryManager;
-        private readonly MemoryCache _providerPathCache = new(new MemoryCacheOptions { SizeLimit = 5000 });
+        private readonly MemoryCache _providerPathCache = new(new MemoryCacheOptions { SizeLimit = Constants.DefaultProviderPathCacheSize });
         private Timer? _cacheMaintenanceTimer;
+        private readonly object _timerInitLock = new object();
+        private static readonly System.Reflection.PropertyInfo? _providerIdsProperty = typeof(BaseItem).GetProperty("ProviderIds");
 
         public OverlayDataService(EmbyIconsEnhancer enhancer, ILibraryManager libraryManager)
         {
             _enhancer = enhancer;
             _libraryManager = libraryManager;
-            _cacheMaintenanceTimer = new Timer(_ => CompactProviderCache(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+            // Defer timer initialization to avoid accessing Plugin.Instance.Configuration before Plugin is fully constructed
+            // Timer will be initialized on first use or can be initialized explicitly later
+        }
+
+        private void EnsureMaintenanceTimerInitialized()
+        {
+            if (_cacheMaintenanceTimer == null)
+            {
+                lock (_timerInitLock)
+                {
+                    if (_cacheMaintenanceTimer == null)
+                    {
+                        var maintenanceInterval = TimeSpan.FromHours(Math.Max(Constants.MinMaintenanceIntervalHours, Plugin.Instance?.Configuration.CacheMaintenanceIntervalHours ?? 1));
+                        _cacheMaintenanceTimer = new Timer(_ => CompactProviderCache(), null, maintenanceInterval, maintenanceInterval);
+                    }
+                }
+            }
         }
 
         private void CompactProviderCache()
         {
             try
             {
-                _providerPathCache?.Compact(0.1);
+                _providerPathCache?.Compact(Constants.CacheCompactionPercentage);
                 if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _enhancer.Logger.Debug("[EmbyIcons] Performed cache compaction for provider path cache.");
             }
             catch (Exception ex)
@@ -84,97 +104,157 @@ namespace EmbyIcons.Services
         {
             if (it == null) return null;
 
+            // Try direct provider IDs first
+            var result = TryExtractFromProviderIds(it);
+            if (result.HasValue) return result;
+
+            // Try reflection-based search through rating properties
+            return TryExtractFromRatingProperties(it);
+        }
+
+        private static float? TryExtractFromProviderIds(BaseItem item)
+        {
             try
             {
-                var providerIdsProp = it.GetType().GetProperty("ProviderIds");
-                var providerIds = providerIdsProp?.GetValue(it) as System.Collections.IDictionary;
-                if (providerIds != null)
+                var providerIds = _providerIdsProperty?.GetValue(item) as System.Collections.IDictionary;
+                if (providerIds == null) return null;
+
+                foreach (System.Collections.DictionaryEntry de in providerIds)
                 {
-                    foreach (System.Collections.DictionaryEntry de in providerIds)
+                    var key = de.Key?.ToString() ?? string.Empty;
+                    var val = de.Value?.ToString() ?? string.Empty;
+                    
+                    if (key.IndexOf(StringConstants.RottenTomatoesProvider, StringComparison.OrdinalIgnoreCase) >= 0 || 
+                        key.Equals(StringConstants.RTShort, StringComparison.OrdinalIgnoreCase))
                     {
-                        var key = de.Key?.ToString() ?? string.Empty;
-                        var val = de.Value?.ToString() ?? string.Empty;
-                        if (key.IndexOf("rotten", StringComparison.OrdinalIgnoreCase) >= 0 || key.Equals("rt", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var parsed = TryParsePercent(val);
-                            if (parsed.HasValue) return parsed.Value;
-                        }
+                        var parsed = TryParsePercent(val);
+                        if (parsed.HasValue) return parsed.Value;
                     }
                 }
             }
             catch { }
+            return null;
+        }
 
+        private static float? TryExtractFromRatingProperties(BaseItem item)
+        {
             try
             {
-                var props = it.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                var props = item.GetType().GetProperties(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                
                 foreach (var p in props)
                 {
-                    if (!typeof(System.Collections.IEnumerable).IsAssignableFrom(p.PropertyType) || p.PropertyType == typeof(string)) continue;
-                    if (p.Name.IndexOf("Rating", StringComparison.OrdinalIgnoreCase) < 0 && p.Name.IndexOf("Ratings", StringComparison.OrdinalIgnoreCase) < 0 && p.Name.IndexOf("External", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (!IsRatingProperty(p)) continue;
 
-                    try
-                    {
-                        var col = p.GetValue(it) as System.Collections.IEnumerable;
-                        if (col == null) continue;
-                        foreach (var entry in col)
-                        {
-                            if (entry == null) continue;
-                            var entryType = entry.GetType();
-                            var sourceProp = entryType.GetProperty("Source") ?? entryType.GetProperty("Name") ?? entryType.GetProperty("Key");
-                            var valueProp = entryType.GetProperty("Value") ?? entryType.GetProperty("Rating") ?? entryType.GetProperty("Score");
-                            var source = sourceProp?.GetValue(entry)?.ToString() ?? string.Empty;
-                            var value = valueProp?.GetValue(entry)?.ToString() ?? string.Empty;
-                            if (!string.IsNullOrEmpty(source) && source.IndexOf("rotten", StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                var parsed = TryParsePercent(value);
-                                if (parsed.HasValue) return parsed.Value;
-                            }
-                            var parsed2 = TryParsePercent(source);
-                            if (parsed2.HasValue) return parsed2.Value;
-                            parsed2 = TryParsePercent(value);
-                            if (parsed2.HasValue) return parsed2.Value;
-                        }
-                    }
-                    catch { }
+                    var result = TryExtractFromProperty(p, item);
+                    if (result.HasValue) return result;
                 }
             }
             catch { }
-
             return null;
+        }
 
-            static float? TryParsePercent(string s)
+        private static bool IsRatingProperty(System.Reflection.PropertyInfo prop)
+        {
+            if (!typeof(System.Collections.IEnumerable).IsAssignableFrom(prop.PropertyType) || 
+                prop.PropertyType == typeof(string))
             {
-                if (string.IsNullOrWhiteSpace(s)) return null;
-                s = s.Trim();
-                try
+                return false;
+            }
+
+            var name = prop.Name;
+            return name.IndexOf(StringConstants.RatingPropertyName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf(StringConstants.RatingsPropertyName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf(StringConstants.ExternalPropertyName, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static float? TryExtractFromProperty(System.Reflection.PropertyInfo prop, BaseItem item)
+        {
+            try
+            {
+                var col = prop.GetValue(item) as System.Collections.IEnumerable;
+                if (col == null) return null;
+
+                foreach (var entry in col)
                 {
-                    var idx = s.IndexOf('%');
-                    if (idx >= 0)
-                    {
-                        var num = s.Substring(0, idx).Trim();
-                        if (float.TryParse(num, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f)) return Math.Clamp(f, 0f, 100f);
-                    }
+                    if (entry == null) continue;
+                    
+                    var result = TryExtractFromRatingEntry(entry);
+                    if (result.HasValue) return result;
+                }
+            }
+            catch { }
+            return null;
+        }
 
-                    if (s.Contains('/'))
-                    {
-                        var parts = s.Split('/');
-                        if (parts.Length == 2 && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a) && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var b) && b != 0)
-                        {
-                            var percent = (a / b) * 100f;
-                            return Math.Clamp(percent, 0f, 100f);
-                        }
-                    }
+        private static float? TryExtractFromRatingEntry(object entry)
+        {
+            var entryType = entry.GetType();
+            var sourceProp = entryType.GetProperty(StringConstants.SourcePropertyName) ?? 
+                           entryType.GetProperty(StringConstants.NamePropertyName) ?? 
+                           entryType.GetProperty(StringConstants.KeyPropertyName);
+            var valueProp = entryType.GetProperty(StringConstants.ValuePropertyName) ?? 
+                          entryType.GetProperty(StringConstants.RatingPropertyName) ?? 
+                          entryType.GetProperty(StringConstants.ScorePropertyName);
+            
+            var source = sourceProp?.GetValue(entry)?.ToString() ?? string.Empty;
+            var value = valueProp?.GetValue(entry)?.ToString() ?? string.Empty;
+            
+            if (!string.IsNullOrEmpty(source) && 
+                source.IndexOf(StringConstants.RottenTomatoesProvider, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var parsed = TryParsePercent(value);
+                if (parsed.HasValue) return parsed.Value;
+            }
+            
+            var parsed2 = TryParsePercent(source) ?? TryParsePercent(value);
+            return parsed2;
+        }
 
-                    if (float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        private static float? TryParsePercent(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            s = s.Trim();
+            
+            try
+            {
+                var idx = s.IndexOf('%');
+                if (idx >= 0)
+                {
+                    var num = s.Substring(0, idx).Trim();
+                    if (float.TryParse(num, System.Globalization.NumberStyles.Float, 
+                        System.Globalization.CultureInfo.InvariantCulture, out var f))
                     {
-                        if (v <= 1f) return Math.Clamp(v * 100f, 0f, 100f);
-                        if (v <= 10f) return Math.Clamp(v * 10f, 0f, 100f);
-                        return Math.Clamp(v, 0f, 100f);
+                        return Math.Clamp(f, 0f, 100f);
                     }
                 }
-                catch { }
-                return null;
+
+                if (s.Contains('/'))
+                {
+                    var parts = s.Split('/');
+                    if (parts.Length == 2 && 
+                        float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, 
+                            System.Globalization.CultureInfo.InvariantCulture, out var a) && 
+                        float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, 
+                            System.Globalization.CultureInfo.InvariantCulture, out var b) && 
+                        b != 0)
+                    {
+                        return Math.Clamp((a / b) * 100f, 0f, 100f);
+                    }
+                }
+
+                if (float.TryParse(s, System.Globalization.NumberStyles.Float, 
+                    System.Globalization.CultureInfo.InvariantCulture, out var v))
+                {
+                    if (v <= 1f) return Math.Clamp(v * 100f, 0f, 100f);
+                    if (v <= 10f) return Math.Clamp(v * 10f, 0f, 100f);
+                    return Math.Clamp(v, 0f, 100f);
+                }
             }
+            catch { }
+            
+            return null;
         }
 
         private OverlayData CreateOverlayDataFromAggregate(EmbyIconsEnhancer.AggregatedSeriesResult aggResult, BaseItem item)
@@ -208,6 +288,8 @@ namespace EmbyIcons.Services
 
         public OverlayData GetOverlayData(BaseItem item, ProfileSettings profileOptions, PluginOptions globalOptions)
         {
+            EnsureMaintenanceTimerInitialized(); // Initialize timer on first use
+
             if (item is Series seriesItem)
             {
                 var aggResult = _enhancer.GetOrBuildAggregatedDataForParent(seriesItem, profileOptions, globalOptions);
@@ -235,6 +317,7 @@ namespace EmbyIcons.Services
                 return CreateOverlayDataFromAggregate(aggResult, collectionItem);
             }
 
+            EmbyIconsEnhancer.EnsureEpisodeCacheInitialized();
             if (EmbyIconsEnhancer._episodeIconCache?.TryGetValue(item.Id, out EmbyIconsEnhancer.EpisodeIconInfo? cachedInfo) == true && cachedInfo != null && cachedInfo.DateModifiedTicks == item.DateModified.Ticks)
             {
                 if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) Plugin.Instance?.Logger.Debug($"[EmbyIcons] Using cached icon info for '{item.Name}'.");
@@ -278,8 +361,9 @@ namespace EmbyIcons.Services
 
             var cacheEntryOptions = new MemoryCacheEntryOptions()
                 .SetSize(1)
-                .SetSlidingExpiration(TimeSpan.FromHours(6));
+                .SetSlidingExpiration(TimeSpan.FromHours(EmbyIconsEnhancer.EpisodeCacheSlidingExpirationHours));
 
+            EmbyIconsEnhancer.EnsureEpisodeCacheInitialized();
             EmbyIconsEnhancer._episodeIconCache?.Set(item.Id, newInfo, cacheEntryOptions);
 
             return overlayData;
@@ -316,7 +400,9 @@ namespace EmbyIcons.Services
             if (profileOptions.SourceIconAlignment != IconAlignment.Disabled && item is Movie movieItem && profileOptions.FilenameBasedIcons.Any())
             {
                 IReadOnlyCollection<string> allPaths = Array.Empty<string>();
-                var providerIdKey = movieItem.ProviderIds.Keys.FirstOrDefault(k => k.Equals("Imdb", StringComparison.OrdinalIgnoreCase) || k.Equals("Tmdb", StringComparison.OrdinalIgnoreCase));
+                var providerIdKey = movieItem.ProviderIds.Keys.FirstOrDefault(k => 
+                    k.Equals(StringConstants.ImdbProvider, StringComparison.OrdinalIgnoreCase) || 
+                    k.Equals(StringConstants.TmdbProvider, StringComparison.OrdinalIgnoreCase));
 
                 if (!string.IsNullOrEmpty(providerIdKey) && movieItem.ProviderIds.TryGetValue(providerIdKey, out var providerIdValue) && !string.IsNullOrEmpty(providerIdValue))
                 {
@@ -397,6 +483,10 @@ namespace EmbyIcons.Services
 
             MediaStream? primaryVideoStream = mainItemStreams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
             MediaStream? primaryAudioStream = mainItemStreams.Where(s => s.Type == MediaStreamType.Audio).OrderByDescending(s => s.Channels).FirstOrDefault();
+
+            // Pre-size collections based on typical stream counts
+            var audioStreams = mainItemStreams.Where(s => s.Type == MediaStreamType.Audio).ToList();
+            var subtitleStreams = mainItemStreams.Where(s => s.Type == MediaStreamType.Subtitle).ToList();
 
             if (profileOptions.AudioIconAlignment != IconAlignment.Disabled || profileOptions.SubtitleIconAlignment != IconAlignment.Disabled ||
                 profileOptions.AudioCodecIconAlignment != IconAlignment.Disabled || profileOptions.VideoCodecIconAlignment != IconAlignment.Disabled)

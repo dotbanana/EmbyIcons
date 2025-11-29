@@ -16,14 +16,17 @@ namespace EmbyIcons.Helpers
 
         public void Insert(string key, T value)
         {
+            if (string.IsNullOrEmpty(key)) return;
+            
             var node = _root;
-            foreach (char c in key)
+            var lowerKey = key.ToLowerInvariant();
+            
+            foreach (char c in lowerKey)
             {
-                var lowerChar = char.ToLowerInvariant(c);
-                if (!node.Children.TryGetValue(lowerChar, out var child))
+                if (!node.Children.TryGetValue(c, out var child))
                 {
                     child = new TrieNode();
-                    node.Children[lowerChar] = child;
+                    node.Children[c] = child;
                 }
                 node = child;
             }
@@ -33,6 +36,8 @@ namespace EmbyIcons.Helpers
 
         public T? FindLongestPrefix(string query)
         {
+            if (string.IsNullOrEmpty(query)) return default;
+            
             var node = _root;
             T? longestPrefixValue = default;
 
@@ -41,10 +46,10 @@ namespace EmbyIcons.Helpers
                 longestPrefixValue = node.Value;
             }
 
-            foreach (char c in query)
+            var lowerQuery = query.ToLowerInvariant();
+            foreach (char c in lowerQuery)
             {
-                var lowerChar = char.ToLowerInvariant(c);
-                if (node.Children.TryGetValue(lowerChar, out var child))
+                if (node.Children.TryGetValue(c, out var child))
                 {
                     node = child;
                     if (node.IsTerminal)

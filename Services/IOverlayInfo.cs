@@ -1,4 +1,6 @@
-﻿namespace EmbyIcons.Services
+﻿using EmbyIcons.Configuration;
+
+namespace EmbyIcons.Services
 {
     internal interface IOverlayInfo
     {

@@ -1,4 +1,6 @@
 ﻿using EmbyIcons.Api;
+using EmbyIcons.Caching;
+using EmbyIcons.Configuration;
 using EmbyIcons.Helpers;
 using EmbyIcons.Models;
 using EmbyIcons.Services;

@@ -1,4 +1,4 @@
-﻿using EmbyIcons;
+﻿using EmbyIcons.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Entities;
 using System;
@@ -16,15 +16,19 @@ namespace EmbyIcons.Helpers
             try
             {
                 if (stream == null) return null;
-                var codec = (stream.Codec ?? "").Trim().ToLowerInvariant();
+                var codec = stream.Codec?.Trim();
                 if (string.IsNullOrEmpty(codec)) return null;
 
-                codec = codec.Replace("dts-hd ma", "dts-hdma")
-                             .Replace("dts:x", "dtsx")
-                             .Replace("e-ac-3", "eac3")
-                             .Replace("ac-3", "ac3");
-
-                return codec;
+                var lowerCodec = codec.ToLowerInvariant();
+                
+                return lowerCodec switch
+                {
+                    var c when c.Contains("dts-hd ma") => c.Replace("dts-hd ma", "dts-hdma"),
+                    var c when c.Contains("dts:x") => c.Replace("dts:x", "dtsx"),
+                    var c when c.Contains("e-ac-3") => c.Replace("e-ac-3", "eac3"),
+                    var c when c.Contains("ac-3") => c.Replace("ac-3", "ac3"),
+                    _ => lowerCodec
+                };
             }
             catch
             {
@@ -37,13 +41,17 @@ namespace EmbyIcons.Helpers
             try
             {
                 if (stream == null) return null;
-                var codec = (stream.Codec ?? "").Trim().ToLowerInvariant();
+                var codec = stream.Codec?.Trim();
                 if (string.IsNullOrEmpty(codec)) return null;
 
-                if (codec is "h265" or "x265") codec = "hevc";
-                if (codec is "h264" or "x264") codec = "h264";
-
-                return codec;
+                var lowerCodec = codec.ToLowerInvariant();
+                
+                return lowerCodec switch
+                {
+                    "h265" or "x265" => "hevc",
+                    "h264" or "x264" => "h264",
+                    _ => lowerCodec
+                };
             }
             catch
             {
@@ -73,7 +81,7 @@ namespace EmbyIcons.Helpers
 
         public static string? GetAspectRatioIconName(int width, int height, bool snapToCommon)
         {
-            if (!snapToCommon || height <= 0) return null;
+            if (!snapToCommon || height <= 0 || width <= 0) return null;
 
             var ratio = (double)width / height;
             var pairs = new (double v, string name)[] {
@@ -189,37 +197,49 @@ namespace EmbyIcons.Helpers
 
             if (videoStream?.VideoRange != null)
             {
-                var videoRange = videoStream.VideoRange.ToLowerInvariant();
-
-                if (videoRange.Contains("dolby") || videoRange.Contains("dv"))
+                var videoRange = videoStream.VideoRange;
+                
+                if (videoRange.Contains(StringConstants.DolbyShort, StringComparison.OrdinalIgnoreCase) || 
+                    videoRange.Contains(StringConstants.DVShort, StringComparison.OrdinalIgnoreCase))
                 {
                     hasDV = true;
                 }
-                if (videoRange.Contains("hdr10+"))
+                if (videoRange.Contains(StringConstants.HDR10Plus, StringComparison.OrdinalIgnoreCase))
                 {
                     hasHDR10Plus = true;
                 }
-                if (videoRange.Contains("hdr"))
+                if (videoRange.Contains(StringConstants.HDR, StringComparison.OrdinalIgnoreCase))
                 {
                     hasHDR = true;
                 }
             }
 
-            var title = ((item.Path ?? "") + " " + (item.Name ?? "")).ToLowerInvariant();
-
-            if (title.Contains("dolby vision") || title.Contains("dolbyvision"))
+            if (!hasDV || !hasHDR10Plus)
             {
-                hasDV = true;
-            }
+                var path = item.Path ?? string.Empty;
+                var name = item.Name ?? string.Empty;
+                
+                if (!hasDV && (path.Contains(StringConstants.DolbyVision, StringComparison.OrdinalIgnoreCase) || 
+                              path.Contains(StringConstants.DolbyVisionCompact, StringComparison.OrdinalIgnoreCase) ||
+                              name.Contains(StringConstants.DolbyVision, StringComparison.OrdinalIgnoreCase) ||
+                              name.Contains(StringConstants.DolbyVisionCompact, StringComparison.OrdinalIgnoreCase)))
+                {
+                    hasDV = true;
+                }
 
-            if (title.Contains("hdr10+") || title.Contains("hdr10plus"))
-            {
-                hasHDR10Plus = true;
-            }
-
-            if (hasHDR10Plus || title.Contains("hdr"))
-            {
-                hasHDR = true;
+                if (!hasHDR10Plus && (path.Contains(StringConstants.HDR10Plus, StringComparison.OrdinalIgnoreCase) || 
+                                     path.Contains(StringConstants.HDR10PlusCompact, StringComparison.OrdinalIgnoreCase) ||
+                                     name.Contains(StringConstants.HDR10Plus, StringComparison.OrdinalIgnoreCase) ||
+                                     name.Contains(StringConstants.HDR10PlusCompact, StringComparison.OrdinalIgnoreCase)))
+                {
+                    hasHDR10Plus = true;
+                    hasHDR = true;
+                }
+                else if (!hasHDR && (path.Contains(StringConstants.HDR, StringComparison.OrdinalIgnoreCase) || 
+                                     name.Contains(StringConstants.HDR, StringComparison.OrdinalIgnoreCase)))
+                {
+                    hasHDR = true;
+                }
             }
 
             if (hasDV) return "dv";

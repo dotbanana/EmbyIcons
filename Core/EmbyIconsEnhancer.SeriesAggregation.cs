@@ -1,4 +1,6 @@
-﻿using EmbyIcons.Helpers;
+﻿using EmbyIcons.Caching;
+using EmbyIcons.Configuration;
+using EmbyIcons.Helpers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -16,7 +18,7 @@ namespace EmbyIcons
 {
     public partial class EmbyIconsEnhancer
     {
-        private const int MaxSeriesCacheSize = 500;
+        private static int MaxSeriesCacheSize => Plugin.Instance?.Configuration.MaxSeriesCacheSize ?? 500;
 
         internal record AggregatedSeriesResult
         {
@@ -34,13 +36,25 @@ namespace EmbyIcons
 
         private void PruneSeriesAggregationCacheWithLimit()
         {
-            if (_seriesAggregationCache.Count > MaxSeriesCacheSize)
+            var count = _seriesAggregationCache.Count;
+            if (count > MaxSeriesCacheSize)
             {
-                var toRemove = _seriesAggregationCache.Count - MaxSeriesCacheSize;
+                var toRemove = count - MaxSeriesCacheSize;
                 if (toRemove <= 0) return;
-                var oldest = _seriesAggregationCache.ToArray().OrderBy(kvp => kvp.Value.Timestamp).Take(toRemove);
-                foreach (var item in oldest) _seriesAggregationCache.TryRemove(item.Key, out _);
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _logger.Debug($"[EmbyIcons] Pruned {toRemove} items from the series aggregation cache.");
+                
+                var keysToRemove = _seriesAggregationCache
+                    .OrderBy(kvp => kvp.Value.Timestamp)
+                    .Take(toRemove)
+                    .Select(kvp => kvp.Key)
+                    .ToArray();
+                    
+                foreach (var key in keysToRemove)
+                {
+                    _seriesAggregationCache.TryRemove(key, out _);
+                }
+                
+                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) 
+                    _logger.Debug($"[EmbyIcons] Pruned {keysToRemove.Length} items from the series aggregation cache.");
             }
         }
 
@@ -70,20 +84,25 @@ namespace EmbyIcons
                 {
                     Parent = parent,
                     Recursive = true,
-                    IncludeItemTypes = new[] { EmbyIcons.Constants.Episode },
+                    IncludeItemTypes = new[] { Configuration.Constants.Episode },
                     Limit = useLiteMode ? 1 : null,
                     OrderBy = useLiteMode ? new[] { (ItemSortBy.SortName, SortOrder.Ascending) } : Array.Empty<(string, SortOrder)>()
                 };
             }
-            else if (parent is Season)
+            else if (parent is Season season)
             {
                 useLiteMode = profileOptions.UseSeriesLiteMode; 
                 requireAllItemsToMatchForLanguage = useLiteMode || profileOptions.ShowSeriesIconsIfAllEpisodesHaveLanguage;
+                
+                // In Lite Mode, use the first episode of the entire series (not just this season)
+                // This ensures consistent behavior across all seasons when only S01E01 is updated
+                var queryParent = useLiteMode && season.Series != null ? season.Series : parent;
+                
                 query = new InternalItemsQuery
                 {
-                    Parent = parent,
+                    Parent = queryParent,
                     Recursive = true,
-                    IncludeItemTypes = new[] { EmbyIcons.Constants.Episode },
+                    IncludeItemTypes = new[] { Configuration.Constants.Episode },
                     Limit = useLiteMode ? 1 : null,
                     OrderBy = useLiteMode ? new[] { (ItemSortBy.SortName, SortOrder.Ascending) } : Array.Empty<(string, SortOrder)>()
                 };
@@ -269,8 +288,11 @@ namespace EmbyIcons
             }
 
             var combinedHashString = string.Join(";", itemHashes.OrderBy(h => h));
-            using var md5 = MD5.Create();
-            var hashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(combinedHashString));
+            byte[] hashBytes;
+            using (var md5 = MD5.Create())
+            {
+                hashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(combinedHashString));
+            }
 
             var result = new AggregatedSeriesResult
             {

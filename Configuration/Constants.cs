@@ -1,11 +1,16 @@
-﻿using EmbyIcons.Helpers;
+﻿using EmbyIcons.Caching;
 using System.Collections.Generic;
 
-namespace EmbyIcons
+namespace EmbyIcons.Configuration
 {
     internal static class Constants
     {
-        public const string Episode = "Episode";
+        public const string Episode = StringConstants.EpisodeType;
+
+        // Cache-related constants
+        public const int DefaultProviderPathCacheSize = 5000;
+        public const double CacheCompactionPercentage = 0.1;
+        public const double MinMaintenanceIntervalHours = 0.5;
 
         public static readonly Dictionary<IconCacheManager.IconType, string> PrefixMap = new()
         {
