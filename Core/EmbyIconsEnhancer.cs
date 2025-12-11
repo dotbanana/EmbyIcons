@@ -1,7 +1,8 @@
-﻿﻿using EmbyIcons.Caching;
+﻿using EmbyIcons.Caching;
 using EmbyIcons.Configuration;
 using EmbyIcons.Helpers;
 using EmbyIcons.Services;
+using EmbyIcons.ImageProcessing;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
@@ -28,14 +29,19 @@ namespace EmbyIcons
     public partial class EmbyIconsEnhancer : IImageEnhancer, IDisposable
     {
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
+        private static readonly ConcurrentDictionary<string, DateTime> _lockLastUsed = new();
+        private static Timer? _lockCleanupTimer;
+        private static readonly object _lockCleanupInitLock = new object();
+        
         private readonly ILibraryManager _libraryManager;
         internal readonly ILogger _logger;
         private readonly IFileSystem _fileSystem;
 
-        private static SemaphoreSlim? _globalConcurrencyLock;
-        private static readonly object _lockInitializationLock = new object();
+        private SemaphoreSlim? _globalConcurrencyLock;
+        private readonly object _lockInitializationLock = new object();
+        private readonly object _templateCacheLock = new object();
 
-        private static SemaphoreSlim GlobalConcurrencyLock
+        private SemaphoreSlim GlobalConcurrencyLock
         {
             get
             {
@@ -60,13 +66,11 @@ namespace EmbyIcons
 
         internal readonly OverlayDataService _overlayDataService;
         private readonly ImageOverlayService _imageOverlayService;
+        private IconTemplateCache? _templateCache;
 
         private static readonly TimeSpan SeriesAggregationPruneInterval = TimeSpan.FromDays(7);
-
-        /// <summary>
-        /// Gets the logger instance for this enhancer.
-        /// </summary>
         public ILogger Logger => _logger;
+        public IconTemplateCache? TemplateCache => _templateCache;
 
         public EmbyIconsEnhancer(ILibraryManager libraryManager, ILogManager logManager, IFileSystem fileSystem)
         {
@@ -74,21 +78,105 @@ namespace EmbyIcons
             _logger = logManager.GetLogger(nameof(EmbyIconsEnhancer));
             _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
 
-            // Don't initialize episode cache here - it will be initialized on first use
-            // to avoid accessing Plugin.Instance.Configuration before Plugin is fully constructed
-
             _logger.Info("[EmbyIcons] Session started.");
+
+            if (ImageProcessingCapabilities.IsSkiaSharpAvailable(_logger))
+            {
+                _logger.Info("[EmbyIcons] SkiaSharp is available. Icon overlays will be applied.");
+            }
+            else
+            {
+                _logger.Warn("[EmbyIcons] SkiaSharp is not available. Icon overlays will be disabled.");
+                _logger.Warn("[EmbyIcons] To enable icon overlays, ensure SkiaSharp native libraries are installed for your platform.");
+            }
 
             _iconCacheManager = new IconCacheManager(_logger);
             _overlayDataService = new OverlayDataService(this, _libraryManager);
             _imageOverlayService = new ImageOverlayService(_logger, _iconCacheManager);
+            
+            if (_lockCleanupTimer == null)
+            {
+                lock (_lockCleanupInitLock)
+                {
+                    if (_lockCleanupTimer == null)
+                    {
+                        _lockCleanupTimer = new Timer(_ => CleanupUnusedLocks(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+                    }
+                }
+            }
         }
+        public void EnsureTemplateCacheInitialized()
+        {
+            if (Plugin.Instance?.Configuration.EnableIconTemplateCaching ?? false)
+            {
+                if (_templateCache == null)
+                {
+                    lock (_templateCacheLock)
+                    {
+                        if (_templateCache == null)
+                        {
+                            _templateCache = new IconTemplateCache(_logger);
+                            _logger.Info("[EmbyIcons] Icon template caching enabled.");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                if (_templateCache != null)
+                {
+                    lock (_templateCacheLock)
+                    {
+                        if (_templateCache != null)
+                        {
+                            try
+                            {
+                                _templateCache.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Debug($"[EmbyIcons] Error disposing template cache: {ex.Message}");
+                            }
+                            _templateCache = null;
+                            _logger.Info("[EmbyIcons] Icon template caching disabled.");
+                        }
+                    }
+                }
+            }
+        }
+        
+        private static void CleanupUnusedLocks()
+        {
+            try
+            {
+                var now = DateTime.UtcNow;
+                var staleThreshold = TimeSpan.FromHours(2);
+                var keysToRemove = _lockLastUsed
+                    .Where(kvp => now - kvp.Value > staleThreshold)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
 
-        /// <summary>
-        /// Forces a complete cache refresh by clearing all caches and reloading icons from the specified folder.
-        /// </summary>
-        /// <param name="iconsFolder">The folder containing custom icons.</param>
-        /// <param name="cancellationToken">Token to cancel the operation.</param>
+                foreach (var key in keysToRemove)
+                {
+                    if (_locks.TryRemove(key, out var semaphore))
+                    {
+                        _lockLastUsed.TryRemove(key, out _);
+                        try { semaphore.Dispose(); }
+                        catch
+                        { 
+                        }
+                    }
+                }
+
+                if (keysToRemove.Count > 0 && Helpers.PluginHelper.IsDebugLoggingEnabled)
+                {
+                    Plugin.Instance?.Logger.Debug($"[EmbyIcons] Cleaned up {keysToRemove.Count} unused item locks. Remaining: {_locks.Count}");
+                }
+            }
+            catch
+            {
+            }
+        }
         public async Task ForceCacheRefreshAsync(string iconsFolder, CancellationToken cancellationToken)
         {
             _logger.Info($"[EmbyIcons] Forcing full cache refresh for folder: '{iconsFolder}'");
@@ -181,6 +269,11 @@ namespace EmbyIcons
         public bool Supports(BaseItem? item, ImageType imageType)
         {
             if (item == null) return false;
+
+            if (!ImageProcessingCapabilities.IsSkiaSharpAvailable(_logger))
+            {
+                return false;
+            }
 
             var profile = Plugin.Instance?.GetProfileForItem(item);
             if (profile == null) return false;
@@ -304,7 +397,6 @@ namespace EmbyIcons
             }
             else
             {
-                // Cache GetMediaStreams result to avoid multiple calls
                 var mediaStreams = item.GetMediaStreams();
                 if (mediaStreams == null) mediaStreams = new List<MediaStream>();
                 sb.Append("_ih").Append(MediaStreamHelper.GetItemMediaStreamHashV2(item, mediaStreams));
@@ -352,7 +444,9 @@ namespace EmbyIcons
                 await GlobalConcurrencyLock.WaitAsync(cancellationToken);
                 globalLockAcquired = true;
 
-                itemSemaphore = _locks.GetOrAdd(item.Id.ToString(), _ => new SemaphoreSlim(1, 1));
+                var itemKey = item.Id.ToString();
+                itemSemaphore = _locks.GetOrAdd(itemKey, _ => new SemaphoreSlim(1, 1));
+                _lockLastUsed[itemKey] = DateTime.UtcNow;
                 await itemSemaphore.WaitAsync(cancellationToken);
                 itemLockAcquired = true;
                 
@@ -369,32 +463,50 @@ namespace EmbyIcons
                 }
 
                 string tempOutput = outputFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                await using (var fsOut = new FileStream(tempOutput, FileMode.Create, FileAccess.Write, FileShare.None, 262144, useAsync: true))
-                {
-                    await _imageOverlayService.ApplyOverlaysToStreamAsync(
-                        sourceBitmap, overlayData, profileOptions, globalOptions, fsOut, cancellationToken, null);
-                }
-
                 try
                 {
-                    if (File.Exists(outputFile))
+                    await using (var fsOut = new FileStream(tempOutput, FileMode.Create, FileAccess.Write, FileShare.None, 262144, useAsync: true))
                     {
-                        File.Replace(tempOutput, outputFile, null);
+                        await _imageOverlayService.ApplyOverlaysToStreamAsync(
+                            sourceBitmap, overlayData, profileOptions, globalOptions, fsOut, cancellationToken, null);
                     }
-                    else
+
+                    try
                     {
-                        File.Move(tempOutput, outputFile);
+                        if (File.Exists(outputFile))
+                        {
+                            File.Replace(tempOutput, outputFile, null);
+                        }
+                        else
+                        {
+                            File.Move(tempOutput, outputFile);
+                        }
+                    }
+                    catch (IOException ioEx) when (ioEx.Message.Contains("volume", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Copy(tempOutput, outputFile, overwrite: true);
+                        try { File.Delete(tempOutput); } 
+                        catch (Exception cleanupEx) 
+                        { 
+                            if (Helpers.PluginHelper.IsDebugLoggingEnabled)
+                                _logger.Debug($"[EmbyIcons] Failed to delete temp file '{tempOutput}': {cleanupEx.Message}");
+                        }
                     }
                 }
-                catch (IOException ioEx) when (ioEx.Message.Contains("volume", StringComparison.OrdinalIgnoreCase))
+                catch
                 {
-                    File.Copy(tempOutput, outputFile, overwrite: true);
-                    try { File.Delete(tempOutput); } catch { }
+                    try { if (File.Exists(tempOutput)) File.Delete(tempOutput); } 
+                    catch (Exception cleanupEx) 
+                    { 
+                        if (Helpers.PluginHelper.IsDebugLoggingEnabled)
+                            _logger.Debug($"[EmbyIcons] Failed to clean up temp file '{tempOutput}': {cleanupEx.Message}");
+                    }
+                    throw;
                 }
             }
             catch (OperationCanceledException)
             {
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled)
                     _logger.Debug($"[EmbyIcons] Image enhancement task cancelled for item: {item?.Name}.");
             }
             catch (Exception ex)
@@ -410,12 +522,20 @@ namespace EmbyIcons
             {
                 if (itemLockAcquired && itemSemaphore != null)
                 {
-                    try { itemSemaphore.Release(); } catch { }
+                    try { itemSemaphore.Release(); } 
+                    catch (Exception ex) 
+                    { 
+                        _logger.ErrorException($"[EmbyIcons] CRITICAL: Failed to release item semaphore for '{item?.Name}'. Potential deadlock risk.", ex);
+                    }
                 }
                 
                 if (globalLockAcquired)
                 {
-                    try { GlobalConcurrencyLock.Release(); } catch { }
+                    try { GlobalConcurrencyLock.Release(); } 
+                    catch (Exception ex) 
+                    { 
+                        _logger.ErrorException("[EmbyIcons] CRITICAL: Failed to release global concurrency lock. Potential deadlock risk.", ex);
+                    }
                 }
             }
         }
@@ -429,6 +549,7 @@ namespace EmbyIcons
         {
             var semaphores = _locks.Values.ToArray();
             _locks.Clear();
+            _lockLastUsed.Clear();
             foreach (var sem in semaphores)
             {
                 try { sem.Dispose(); } 
@@ -440,6 +561,9 @@ namespace EmbyIcons
             
             try { _overlayDataService?.Dispose(); } 
             catch (Exception ex) { _logger?.Debug($"[EmbyIcons] Error disposing overlay data service: {ex.Message}"); }
+            
+            try { _templateCache?.Dispose(); } 
+            catch (Exception ex) { _logger?.Debug($"[EmbyIcons] Error disposing template cache: {ex.Message}"); }
             
             if (_globalConcurrencyLock != null)
             {

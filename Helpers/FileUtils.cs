@@ -46,7 +46,15 @@ namespace EmbyIcons.Helpers
             }
             catch
             {
-                try { if (File.Exists(tempOutput)) File.Delete(tempOutput); } catch { }
+                try 
+                { 
+                    if (File.Exists(tempOutput)) 
+                        File.Delete(tempOutput); 
+                } 
+                catch (Exception cleanupEx) 
+                { 
+                    System.Diagnostics.Debug.WriteLine($"[EmbyIcons] Failed to clean up temp file '{tempOutput}': {cleanupEx.Message}");
+                }
                 throw;
             }
         }

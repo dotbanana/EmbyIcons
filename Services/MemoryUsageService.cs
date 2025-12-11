@@ -41,14 +41,16 @@ namespace EmbyIcons.Services
             {
                 privateBytes = proc.PrivateMemorySize64;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.Debug($"[EmbyIcons] Unable to read PrivateMemorySize64: {ex.Message}");
+            }
 
             long managed = GC.GetTotalMemory(forceFullCollection: false);
 
             long iconCacheEstimate = 0;
             try
             {
-                var icmType = typeof(EmbyIcons.EmbyIconsEnhancer).Assembly.GetType("EmbyIcons.Helpers.IconCacheManager");
                 var plugin = EmbyIcons.Plugin.Instance;
                 if (plugin != null)
                 {
@@ -61,11 +63,12 @@ namespace EmbyIcons.Services
                         var cache = cacheField?.GetValue(icm) as Microsoft.Extensions.Caching.Memory.MemoryCache;
                         if (cache != null)
                         {
-                            try
+                            iconCacheEstimate = 0;
+                            
+                            if (Helpers.PluginHelper.IsDebugLoggingEnabled)
                             {
-                                iconCacheEstimate = 0;
+                                _logger.Debug("[EmbyIcons] Icon cache memory estimation not yet implemented.");
                             }
-                            catch { }
                         }
                     }
                 }

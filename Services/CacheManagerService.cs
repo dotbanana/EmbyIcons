@@ -39,18 +39,27 @@ namespace EmbyIcons.Services
             var config = plugin.Configuration;
             var iconsFolder = config.IconsFolder;
 
-            _ = Task.Run(async () =>
+            var cacheRefreshTask = Task.Run(async () =>
             {
                 try
                 {
+                    _logger.Info("[EmbyIcons] Starting background cache refresh.");
                     await _enhancer.ForceCacheRefreshAsync(iconsFolder, CancellationToken.None);
-                    _logger.Info("[EmbyIcons] Background cache refresh completed.");
+                    _logger.Info("[EmbyIcons] Background cache refresh completed successfully.");
                 }
                 catch (Exception ex)
                 {
                     _logger.ErrorException("[EmbyIcons] Error during background cache refresh.", ex);
                 }
             });
+            
+            _ = cacheRefreshTask.ContinueWith(t => 
+            {
+                if (t.IsFaulted && t.Exception != null)
+                {
+                    _logger.ErrorException("[EmbyIcons] Unhandled exception in cache refresh background task.", t.Exception);
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
 
             config.PersistedVersion = Guid.NewGuid().ToString("N");
             plugin.SaveCurrentConfiguration();

@@ -47,13 +47,11 @@ namespace EmbyIcons.Services
             var maxItemCacheSize = Math.Max(1000, _configuration.MaxItemToProfileCacheSize);
             var maxCollectionCacheSize = Math.Max(100, _configuration.MaxCollectionToProfileCacheSize);
             
-            var oldCache = _itemToProfileIdCache;
-            _itemToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = maxItemCacheSize });
-            oldCache.Dispose();
+            var oldCache = Interlocked.Exchange(ref _itemToProfileIdCache, new MemoryCache(new MemoryCacheOptions { SizeLimit = maxItemCacheSize }));
+            try { oldCache?.Dispose(); } catch (Exception ex) { _logger.Debug($"[EmbyIcons] Error disposing old item cache: {ex.Message}"); }
 
-            var oldCollectionCache = _collectionToProfileIdCache;
-            _collectionToProfileIdCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = maxCollectionCacheSize });
-            oldCollectionCache.Dispose();
+            var oldCollectionCache = Interlocked.Exchange(ref _collectionToProfileIdCache, new MemoryCache(new MemoryCacheOptions { SizeLimit = maxCollectionCacheSize }));
+            try { oldCollectionCache?.Dispose(); } catch (Exception ex) { _logger.Debug($"[EmbyIcons] Error disposing old collection cache: {ex.Message}"); }
 
             _logger.Info("[EmbyIcons] Library path and item profile caches have been invalidated.");
         }
@@ -64,14 +62,21 @@ namespace EmbyIcons.Services
             {
                 _itemToProfileIdCache?.Dispose();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.Debug($"[EmbyIcons] Error disposing item profile cache: {ex.Message}");
+            }
 
             try
             {
                 _collectionToProfileIdCache?.Dispose();
             }
-            catch { }
-            try { _cacheMaintenanceTimer?.Dispose(); } catch { }
+            catch (Exception ex)
+            {
+                _logger.Debug($"[EmbyIcons] Error disposing collection profile cache: {ex.Message}");
+            }
+            
+            try { _cacheMaintenanceTimer?.Dispose(); } catch (Exception ex) { _logger.Debug($"[EmbyIcons] Error disposing cache maintenance timer: {ex.Message}"); }
         }
 
         private void CompactCaches()
@@ -80,7 +85,8 @@ namespace EmbyIcons.Services
             {
                 _collectionToProfileIdCache?.Compact(0.1);
                 _itemToProfileIdCache?.Compact(0.05);
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _logger.Debug("[EmbyIcons] Performed cache compaction for profile/collection caches.");
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                    _logger.Debug("[EmbyIcons] Performed cache compaction for profile/collection caches.");
             }
             catch (Exception ex)
             {

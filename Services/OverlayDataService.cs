@@ -31,8 +31,6 @@ namespace EmbyIcons.Services
         {
             _enhancer = enhancer;
             _libraryManager = libraryManager;
-            // Defer timer initialization to avoid accessing Plugin.Instance.Configuration before Plugin is fully constructed
-            // Timer will be initialized on first use or can be initialized explicitly later
         }
 
         private void EnsureMaintenanceTimerInitialized()
@@ -55,7 +53,8 @@ namespace EmbyIcons.Services
             try
             {
                 _providerPathCache?.Compact(Constants.CacheCompactionPercentage);
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _enhancer.Logger.Debug("[EmbyIcons] Performed cache compaction for provider path cache.");
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                    _enhancer.Logger.Debug("[EmbyIcons] Performed cache compaction for provider path cache.");
             }
             catch (Exception ex)
             {
@@ -69,19 +68,25 @@ namespace EmbyIcons.Services
             {
                 _providerPathCache?.Dispose();
             }
-            catch { }
-            try { _cacheMaintenanceTimer?.Dispose(); } catch { }
+            catch (Exception ex)
+            {
+                _enhancer.Logger.Debug($"[EmbyIcons] Error disposing provider path cache: {ex.Message}");
+            }
+            
+            try { _cacheMaintenanceTimer?.Dispose(); } catch (Exception ex) { _enhancer.Logger.Debug($"[EmbyIcons] Error disposing cache maintenance timer: {ex.Message}"); }
         }
 
         private static string NormalizeTag(string tag)
         {
             if (string.IsNullOrWhiteSpace(tag)) return string.Empty;
 
+            tag = tag.Trim();
             var sb = new StringBuilder(tag.Length);
             bool lastWasWhitespace = false;
 
-            foreach (char c in tag.Trim())
+            for (int i = 0; i < tag.Length; i++)
             {
+                char c = tag[i];
                 if (char.IsWhiteSpace(c))
                 {
                     if (!lastWasWhitespace)
@@ -104,11 +109,9 @@ namespace EmbyIcons.Services
         {
             if (it == null) return null;
 
-            // Try direct provider IDs first
             var result = TryExtractFromProviderIds(it);
             if (result.HasValue) return result;
 
-            // Try reflection-based search through rating properties
             return TryExtractFromRatingProperties(it);
         }
 
@@ -132,7 +135,13 @@ namespace EmbyIcons.Services
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                {
+                    Plugin.Instance.Logger.Debug($"[EmbyIcons] Error extracting rating from provider IDs: {ex.Message}");
+                }
+            }
             return null;
         }
 
@@ -151,7 +160,13 @@ namespace EmbyIcons.Services
                     if (result.HasValue) return result;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                {
+                    Plugin.Instance.Logger.Debug($"[EmbyIcons] Error extracting rating from properties: {ex.Message}");
+                }
+            }
             return null;
         }
 
@@ -184,7 +199,13 @@ namespace EmbyIcons.Services
                     if (result.HasValue) return result;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                {
+                    Plugin.Instance.Logger.Debug($"[EmbyIcons] Error extracting from property '{prop.Name}': {ex.Message}");
+                }
+            }
             return null;
         }
 
@@ -252,7 +273,13 @@ namespace EmbyIcons.Services
                     return Math.Clamp(v, 0f, 100f);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                {
+                    Plugin.Instance.Logger.Debug($"[EmbyIcons] Error parsing percentage from '{s}': {ex.Message}");
+                }
+            }
             
             return null;
         }
@@ -320,7 +347,8 @@ namespace EmbyIcons.Services
             EmbyIconsEnhancer.EnsureEpisodeCacheInitialized();
             if (EmbyIconsEnhancer._episodeIconCache?.TryGetValue(item.Id, out EmbyIconsEnhancer.EpisodeIconInfo? cachedInfo) == true && cachedInfo != null && cachedInfo.DateModifiedTicks == item.DateModified.Ticks)
             {
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) Plugin.Instance?.Logger.Debug($"[EmbyIcons] Using cached icon info for '{item.Name}'.");
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                    Plugin.Instance?.Logger.Debug($"[EmbyIcons] Using cached icon info for '{item.Name}'.");
                 return new OverlayData
                 {
                     AudioLanguages = cachedInfo.AudioLangs,
@@ -339,7 +367,8 @@ namespace EmbyIcons.Services
                 };
             }
 
-            if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) Plugin.Instance?.Logger.Debug($"[EmbyIcons] No valid cache. Processing streams for '{item.Name}'.");
+            if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                Plugin.Instance?.Logger.Debug($"[EmbyIcons] No valid cache. Processing streams for '{item.Name}'.");
             var overlayData = ProcessMediaStreams(item, profileOptions, globalOptions);
 
             var newInfo = new EmbyIconsEnhancer.EpisodeIconInfo
@@ -389,7 +418,13 @@ namespace EmbyIcons.Services
                     var rt = ExtractRottenTomatoesFromItem(item);
                     if (rt.HasValue) data.RottenTomatoesRating = rt.Value;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                    {
+                        _enhancer.Logger.Debug($"[EmbyIcons] Error extracting Rotten Tomatoes rating for '{item.Name}': {ex.Message}");
+                    }
+                }
             }
 
             if (profileOptions.ParentalRatingIconAlignment != IconAlignment.Disabled)
@@ -435,7 +470,7 @@ namespace EmbyIcons.Services
                             .SetSlidingExpiration(TimeSpan.FromHours(6))
                             .RegisterPostEvictionCallback((key, value, reason, state) =>
                             {
-                                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                                if (Helpers.PluginHelper.IsDebugLoggingEnabled)
                                 {
                                     _enhancer.Logger.Debug($"[EmbyIcons] Provider path cache entry evicted: {key} Reason: {reason}");
                                 }
@@ -484,7 +519,6 @@ namespace EmbyIcons.Services
             MediaStream? primaryVideoStream = mainItemStreams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
             MediaStream? primaryAudioStream = mainItemStreams.Where(s => s.Type == MediaStreamType.Audio).OrderByDescending(s => s.Channels).FirstOrDefault();
 
-            // Pre-size collections based on typical stream counts
             var audioStreams = mainItemStreams.Where(s => s.Type == MediaStreamType.Audio).ToList();
             var subtitleStreams = mainItemStreams.Where(s => s.Type == MediaStreamType.Subtitle).ToList();
 

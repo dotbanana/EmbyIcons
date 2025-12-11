@@ -21,7 +21,7 @@ namespace EmbyIcons.Services
 
         private record OverlayGroupInfo(IconAlignment Alignment, int Priority, bool HorizontalLayout, List<SKImage> Icons) : IOverlayInfo;
         private record RatingOverlayInfo(IconAlignment Alignment, int Priority, bool HorizontalLayout, float Score, SKImage? Icon, bool IsPercent, ScoreBackgroundShape BackgroundShape, string BackgroundColor, int BackgroundOpacity) : IOverlayInfo;
-        private record DrawingContext(SKCanvas Canvas, SKPaint Paint, SKPaint TextPaint, ProfileSettings Options, int IconSize, int EdgePadding, int InterIconPadding, int CanvasWidth, int CanvasHeight);
+        private record DrawingContext(SKCanvas Canvas, SKPaint Paint, SKPaint TextPaint, ProfileSettings Options, int IconSize, int EdgePadding, int InterIconPadding, int CanvasWidth, int CanvasHeight, float RatingFontSizeMultiplier, string RatingPercentageSuffix);
 
         private record IconGroupDefinition(
             Func<ProfileSettings, IconAlignment> GetAlignment,
@@ -64,85 +64,97 @@ namespace EmbyIcons.Services
         {
             await _iconCache.InitializeAsync(globalOptions.IconsFolder, cancellationToken).ConfigureAwait(false);
 
-            using var surface = SKSurface.Create(new SKImageInfo(sourceBitmap.Width, sourceBitmap.Height));
-            var canvas = surface.Canvas;
-            canvas.DrawBitmap(sourceBitmap, 0, 0);
-
-            var iconSize = Math.Clamp((Math.Min(sourceBitmap.Width, sourceBitmap.Height) * profileOptions.IconSize) / 100, 8, 512);
-            var edgePadding = Math.Clamp(iconSize / 4, 2, 64);
-            var interIconPadding = Math.Clamp(iconSize / 8, 1, 64);
-
-            using var paint = new SKPaint { IsAntialias = globalOptions.EnableImageSmoothing, FilterQuality = globalOptions.EnableImageSmoothing ? SKFilterQuality.Medium : SKFilterQuality.None };
-            using var textPaint = new SKPaint { IsAntialias = globalOptions.EnableImageSmoothing, FilterQuality = globalOptions.EnableImageSmoothing ? SKFilterQuality.Medium : SKFilterQuality.None, Color = SKColors.White };
-
-            var drawingContext = new DrawingContext(canvas, paint, textPaint, profileOptions, iconSize, edgePadding, interIconPadding, sourceBitmap.Width, sourceBitmap.Height);
-
-            var iconGroups = await CreateIconGroups(data, profileOptions, globalOptions, cancellationToken, injectedIcons).ConfigureAwait(false);
-            var ratingInfo = await CreateRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
-            var rottenInfo = await CreateRottenRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
-
-            var overlaysByCorner = new Dictionary<IconAlignment, List<IOverlayInfo>>();
-            foreach (var group in iconGroups)
-            {
-                if (!overlaysByCorner.ContainsKey(group.Alignment)) overlaysByCorner[group.Alignment] = new List<IOverlayInfo>();
-                overlaysByCorner[group.Alignment].Add(group);
-            }
-            if (ratingInfo != null)
-            {
-                if (!overlaysByCorner.ContainsKey(ratingInfo.Alignment)) overlaysByCorner[ratingInfo.Alignment] = new List<IOverlayInfo>();
-                overlaysByCorner[ratingInfo.Alignment].Add(ratingInfo);
-            }
-            if (rottenInfo != null)
-            {
-                if (!overlaysByCorner.ContainsKey(rottenInfo.Alignment)) overlaysByCorner[rottenInfo.Alignment] = new List<IOverlayInfo>();
-                overlaysByCorner[rottenInfo.Alignment].Add(rottenInfo);
-            }
-
-            foreach (var corner in overlaysByCorner.Keys)
-            {
-                DrawCorner(overlaysByCorner[corner], corner, drawingContext);
-            }
-
-            using var image = surface.Snapshot();
-
-            var format = globalOptions.OutputFormat switch
-            {
-                OutputFormat.Png => SKEncodedImageFormat.Png,
-                OutputFormat.Jpeg => SKEncodedImageFormat.Jpeg,
-                _ => (sourceBitmap.Info.AlphaType == SKAlphaType.Opaque) ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Png
-            };
-
-            int quality = Math.Clamp(globalOptions.JpegQuality, 10, 100);
-            using var encodedData = image.Encode(format, format == SKEncodedImageFormat.Jpeg ? quality : 100);
-
-            encodedData.SaveTo(outputStream);
-
+            List<OverlayGroupInfo>? iconGroups = null;
+            RatingOverlayInfo? ratingInfo = null;
+            RatingOverlayInfo? rottenInfo = null;
+            
             try
             {
+                using var surface = SKSurface.Create(new SKImageInfo(sourceBitmap.Width, sourceBitmap.Height));
+                var canvas = surface.Canvas;
+                canvas.DrawBitmap(sourceBitmap, 0, 0);
+
+                var iconSize = Math.Clamp((Math.Min(sourceBitmap.Width, sourceBitmap.Height) * profileOptions.IconSize) / 100, 8, 512);
+                var edgePadding = Math.Clamp(iconSize / 4, 2, 64);
+                var interIconPadding = Math.Clamp(iconSize / 8, 1, 64);
+
+                using var paint = new SKPaint { IsAntialias = globalOptions.EnableImageSmoothing, FilterQuality = globalOptions.EnableImageSmoothing ? SKFilterQuality.Medium : SKFilterQuality.None };
+                using var textPaint = new SKPaint { IsAntialias = globalOptions.EnableImageSmoothing, FilterQuality = globalOptions.EnableImageSmoothing ? SKFilterQuality.Medium : SKFilterQuality.None, Color = SKColors.White };
+
+                var drawingContext = new DrawingContext(canvas, paint, textPaint, profileOptions, iconSize, edgePadding, interIconPadding, sourceBitmap.Width, sourceBitmap.Height, profileOptions.RatingFontSizeMultiplier, profileOptions.RatingPercentageSuffix ?? "%");
+
+                iconGroups = await CreateIconGroups(data, profileOptions, globalOptions, cancellationToken, injectedIcons).ConfigureAwait(false);
+                ratingInfo = await CreateRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
+                rottenInfo = await CreateRottenRatingInfo(data, profileOptions, globalOptions, cancellationToken).ConfigureAwait(false);
+
+                var overlaysByCorner = new Dictionary<IconAlignment, List<IOverlayInfo>>();
                 foreach (var group in iconGroups)
                 {
-                    foreach (var img in group.Icons)
-                    {
-                        try { img?.Dispose(); } catch (Exception disposeEx) 
-                        { 
-                            if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
-                                _logger?.Debug($"[EmbyIcons] Error disposing icon: {disposeEx.Message}");
-                        }
-                    }
+                    if (!overlaysByCorner.ContainsKey(group.Alignment)) overlaysByCorner[group.Alignment] = new List<IOverlayInfo>();
+                    overlaysByCorner[group.Alignment].Add(group);
+                }
+                if (ratingInfo != null)
+                {
+                    if (!overlaysByCorner.ContainsKey(ratingInfo.Alignment)) overlaysByCorner[ratingInfo.Alignment] = new List<IOverlayInfo>();
+                    overlaysByCorner[ratingInfo.Alignment].Add(ratingInfo);
+                }
+                if (rottenInfo != null)
+                {
+                    if (!overlaysByCorner.ContainsKey(rottenInfo.Alignment)) overlaysByCorner[rottenInfo.Alignment] = new List<IOverlayInfo>();
+                    overlaysByCorner[rottenInfo.Alignment].Add(rottenInfo);
                 }
 
-                if (ratingInfo?.Icon != null)
+                foreach (var corner in overlaysByCorner.Keys)
                 {
-                    try { ratingInfo.Icon.Dispose(); } catch { }
+                    DrawCorner(overlaysByCorner[corner], corner, drawingContext);
                 }
-                if (rottenInfo?.Icon != null)
+
+                using var image = surface.Snapshot();
+
+                var format = globalOptions.OutputFormat switch
                 {
-                    try { rottenInfo.Icon.Dispose(); } catch { }
-                }
+                    OutputFormat.Png => SKEncodedImageFormat.Png,
+                    OutputFormat.Jpeg => SKEncodedImageFormat.Jpeg,
+                    _ => (sourceBitmap.Info.AlphaType == SKAlphaType.Opaque) ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Png
+                };
+
+                int quality = Math.Clamp(globalOptions.JpegQuality, 10, 100);
+                using var encodedData = image.Encode(format, format == SKEncodedImageFormat.Jpeg ? quality : 100);
+
+                encodedData.SaveTo(outputStream);
             }
-            catch (Exception ex)
+            finally
             {
-                _logger?.ErrorException("[EmbyIcons] Error during icon cleanup.", ex);
+                try
+                {
+                    if (iconGroups != null)
+                    {
+                        foreach (var group in iconGroups)
+                        {
+                            foreach (var img in group.Icons)
+                            {
+                                try { img?.Dispose(); } catch (Exception disposeEx) 
+                                { 
+                                    if (Helpers.PluginHelper.IsDebugLoggingEnabled)
+                                        _logger?.Debug($"[EmbyIcons] Error disposing icon: {disposeEx.Message}");
+                                }
+                            }
+                        }
+                    }
+
+                    if (ratingInfo?.Icon != null)
+                    {
+                        try { ratingInfo.Icon.Dispose(); } catch { }
+                    }
+                    if (rottenInfo?.Icon != null)
+                    {
+                        try { rottenInfo.Icon.Dispose(); } catch { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.ErrorException("[EmbyIcons] Error during icon cleanup.", ex);
+                }
             }
         }
 
@@ -276,16 +288,9 @@ namespace EmbyIcons.Services
         {
             var typeface = FontHelper.GetDefaultBold(_logger);
             if (typeface == null) return SKSize.Empty;
-            string scoreText;
-            if (rating.IsPercent)
-            {
-                scoreText = Math.Round(rating.Score).ToString("F0") + "%";
-            }
-            else
-            {
-                scoreText = rating.Score.ToString("F1", CultureInfo.InvariantCulture);
-            }
-            var fontSize = context.IconSize * 0.75f;
+            
+            string scoreText = GetRatingText(rating, context);
+            var fontSize = context.IconSize * context.RatingFontSizeMultiplier;
 
             var textPaint = context.TextPaint;
             textPaint.Typeface = typeface;
@@ -364,16 +369,8 @@ namespace EmbyIcons.Services
             if (totalSize.IsEmpty) return SKSize.Empty;
 
             var typeface = FontHelper.GetDefaultBold(_logger);
-            string scoreText;
-            if (rating.IsPercent)
-            {
-                scoreText = Math.Round(rating.Score).ToString("F0") + "%";
-            }
-            else
-            {
-                scoreText = rating.Score.ToString("F1", CultureInfo.InvariantCulture);
-            }
-            var fontSize = context.IconSize * 0.75f;
+            string scoreText = GetRatingText(rating, context);
+            var fontSize = context.IconSize * context.RatingFontSizeMultiplier;
 
             var textPaint = context.TextPaint;
 
@@ -455,6 +452,18 @@ namespace EmbyIcons.Services
             canvas.DrawText(text, position.X, position.Y, textPaint);
         }
 
+        private string GetRatingText(RatingOverlayInfo rating, DrawingContext context)
+        {
+            if (rating.IsPercent)
+            {
+                return Math.Round(rating.Score).ToString("F0") + context.RatingPercentageSuffix;
+            }
+            else
+            {
+                return rating.Score.ToString("F1", CultureInfo.InvariantCulture);
+            }
+        }
+
         private async Task<List<OverlayGroupInfo>> CreateIconGroups(OverlayData data, ProfileSettings profileOptions, PluginOptions globalOptions, CancellationToken cancellationToken, Dictionary<IconCacheManager.IconType, List<SKImage>>? injectedIcons)
         {
             var groups = new List<OverlayGroupInfo>(_groupDefinitions.Count);
@@ -485,7 +494,6 @@ namespace EmbyIcons.Services
             }
             else
             {
-                // Load icons in parallel for better performance
                 var namesList = names.ToList();
                 if (namesList.Count > 1)
                 {
@@ -503,7 +511,6 @@ namespace EmbyIcons.Services
                 }
                 else
                 {
-                    // Single icon - no need for parallel loading
                     foreach (var name in namesList)
                     {
                         var icon = await _iconCache.GetIconAsync(name, type, options, cancellationToken).ConfigureAwait(false);

@@ -53,7 +53,7 @@ namespace EmbyIcons
                     _seriesAggregationCache.TryRemove(key, out _);
                 }
                 
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) 
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
                     _logger.Debug($"[EmbyIcons] Pruned {keysToRemove.Length} items from the series aggregation cache.");
             }
         }
@@ -68,7 +68,8 @@ namespace EmbyIcons
 
             if (_seriesAggregationCache.TryGetValue(parent.Id, out var cachedResult))
             {
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _logger.Debug($"[EmbyIcons] Using cached aggregated data for '{parent.Name}' ({parent.Id}).");
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                    _logger.Debug($"[EmbyIcons] Using cached aggregated data for '{parent.Name}' ({parent.Id}).");
                 return cachedResult;
             }
 
@@ -89,18 +90,13 @@ namespace EmbyIcons
                     OrderBy = useLiteMode ? new[] { (ItemSortBy.SortName, SortOrder.Ascending) } : Array.Empty<(string, SortOrder)>()
                 };
             }
-            else if (parent is Season season)
+            else if (parent is Season)
             {
                 useLiteMode = profileOptions.UseSeriesLiteMode; 
                 requireAllItemsToMatchForLanguage = useLiteMode || profileOptions.ShowSeriesIconsIfAllEpisodesHaveLanguage;
-                
-                // In Lite Mode, use the first episode of the entire series (not just this season)
-                // This ensures consistent behavior across all seasons when only S01E01 is updated
-                var queryParent = useLiteMode && season.Series != null ? season.Series : parent;
-                
                 query = new InternalItemsQuery
                 {
-                    Parent = queryParent,
+                    Parent = parent,
                     Recursive = true,
                     IncludeItemTypes = new[] { Configuration.Constants.Episode },
                     Limit = useLiteMode ? 1 : null,
@@ -127,7 +123,8 @@ namespace EmbyIcons
             }
 
 
-            if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false) _logger.Debug($"[EmbyIcons] No valid cache found. Aggregating data for '{parent.Name}' ({parent.Id}). LiteMode: {useLiteMode}.");
+            if (Helpers.PluginHelper.IsDebugLoggingEnabled) 
+                _logger.Debug($"[EmbyIcons] No valid cache found. Aggregating data for '{parent.Name}' ({parent.Id}). LiteMode: {useLiteMode}.");
 
             var items = _libraryManager.GetItemList(query);
             var itemList = items.ToList();

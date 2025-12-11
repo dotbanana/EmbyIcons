@@ -115,11 +115,15 @@ namespace EmbyIcons
             }
 
             var resultStream = new MemoryStream();
-            await _imageOverlayService.ApplyOverlaysToStreamAsync(originalBitmap, previewData, profileSettings, globalOptions, resultStream, CancellationToken.None, injectedIcons);
-            resultStream.Position = 0;
-
-
-            return resultStream;
+            try
+            {
+                await _imageOverlayService.ApplyOverlaysToStreamAsync(originalBitmap, previewData, profileSettings, globalOptions, resultStream, CancellationToken.None, injectedIcons);
+                resultStream.Position = 0;
+                return resultStream;
+            }
+            finally
+            {
+            }
         }
     }
 }

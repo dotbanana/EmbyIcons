@@ -265,10 +265,11 @@ namespace EmbyIcons.Caching
                 try
                 {
                     using var ms = new MemoryStream(cachedBytes);
-                    using var bmp = SKBitmap.Decode(ms);
+                    var bmp = SKBitmap.Decode(ms);
                     if (bmp != null)
                     {
                         var img = SKImage.FromBitmap(bmp);
+                        bmp.Dispose();
                         return img;
                     }
                 }
@@ -293,10 +294,11 @@ namespace EmbyIcons.Caching
                     try
                     {
                         using var ms = new MemoryStream(bytes);
-                        using var bmp = SKBitmap.Decode(ms);
+                        var bmp = SKBitmap.Decode(ms);
                         if (bmp != null)
                         {
                             var image = SKImage.FromBitmap(bmp);
+                            bmp.Dispose();
                             return image;
                         }
                     }
@@ -314,8 +316,13 @@ namespace EmbyIcons.Caching
                 try
                 {
                     using var ms = new MemoryStream(cachedBytes);
-                    using var bmp = SKBitmap.Decode(ms);
-                    if (bmp != null) return SKImage.FromBitmap(bmp);
+                    var bmp = SKBitmap.Decode(ms);
+                    if (bmp != null)
+                    {
+                        var img = SKImage.FromBitmap(bmp);
+                        bmp.Dispose();
+                        return img;
+                    }
                 }
                 catch { }
             }
@@ -339,8 +346,13 @@ namespace EmbyIcons.Caching
             try
             {
                 using var ms = new MemoryStream(bytes);
-                using var bmp = SKBitmap.Decode(ms);
-                if (bmp != null) return SKImage.FromBitmap(bmp);
+                var bmp = SKBitmap.Decode(ms);
+                if (bmp != null)
+                {
+                    var img = SKImage.FromBitmap(bmp);
+                    bmp.Dispose();
+                    return img;
+                }
             }
             catch { }
 
@@ -374,7 +386,7 @@ namespace EmbyIcons.Caching
                     _iconImageCache?.Compact(0.1);
                 }
 
-                if (Plugin.Instance?.Configuration.EnableDebugLogging ?? false)
+                if (Helpers.PluginHelper.IsDebugLoggingEnabled)
                     _logger.Debug("[EmbyIcons] Performed cache compaction for icon image cache.");
             }
             catch (Exception ex)

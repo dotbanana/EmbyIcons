@@ -1,4 +1,4 @@
-﻿﻿using EmbyIcons.Api;
+﻿using EmbyIcons.Api;
 using EmbyIcons.Configuration;
 using EmbyIcons.Helpers;
 using EmbyIcons.Services;
@@ -28,9 +28,6 @@ using System.Threading.Tasks;
 
 namespace EmbyIcons
 {
-    /// <summary>
-    /// Main plugin class for EmbyIcons. Provides icon overlays on media posters based on video/audio attributes.
-    /// </summary>
     public class Plugin : BasePlugin<PluginOptions>, IHasWebPages, IHasThumbImage, IDisposable
     {
         private readonly IApplicationHost _appHost;
@@ -39,7 +36,7 @@ namespace EmbyIcons
         private readonly IFileSystem _fileSystem;
         private readonly ILogger _logger;
         private readonly ILogManager _logManager;
-        private EmbyIconsEnhancer? _enhancer;
+        private readonly Lazy<EmbyIconsEnhancer> _enhancerLazy;
         private Timer? _pruningTimer;
         private ProfileManagerService? _profileManager;
         private ConfigurationMonitor? _configMonitor;
@@ -55,18 +52,7 @@ namespace EmbyIcons
 
         public string ConfigurationVersion => Configuration.PersistedVersion;
 
-        public EmbyIconsEnhancer Enhancer
-        {
-            get
-            {
-                if (_enhancer == null)
-                {
-                    _enhancer = new EmbyIconsEnhancer(_libraryManager, _logManager, _fileSystem);
-                    EnsurePruningTimerInitialized();
-                }
-                return _enhancer;
-            }
-        }
+        public EmbyIconsEnhancer Enhancer => _enhancerLazy.Value;
 
         private void EnsurePruningTimerInitialized()
         {
@@ -104,11 +90,16 @@ namespace EmbyIcons
             _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
             Instance = this;
 
+            _enhancerLazy = new Lazy<EmbyIconsEnhancer>(() =>
+            {
+                var enhancer = new EmbyIconsEnhancer(_libraryManager, _logManager, _fileSystem);
+                EnsurePruningTimerInitialized();
+                enhancer.EnsureTemplateCacheInitialized();
+                return enhancer;
+            }, LazyThreadSafetyMode.ExecutionAndPublication);
+
             _logger.Debug("EmbyIcons plugin initialized.");
             SubscribeLibraryEvents();
-
-            // Defer timer initialization to after base constructor completes
-            // Timer will be initialized when Configuration is first accessed
         }
 
         private void EnsureConfigurationMigrated()
@@ -126,7 +117,7 @@ namespace EmbyIcons
                 _migrationAttempted = true;
             }
 
-            Task.Run(() =>
+            var migrationTask = Task.Run(() =>
             {
                 try
                 {
@@ -233,6 +224,14 @@ namespace EmbyIcons
                     }
                 }
             });
+            
+            _ = migrationTask.ContinueWith(t => 
+            {
+                if (t.IsFaulted && t.Exception != null)
+                {
+                    _logger.ErrorException("[EmbyIcons] Unhandled exception in migration background task.", t.Exception);
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
 
         public IconProfile? GetProfileForItem(BaseItem item)
@@ -259,6 +258,95 @@ namespace EmbyIcons
                     Name = "EmbyIconsConfigurationjs",
                     EmbeddedResourcePath = GetType().Namespace + ".EmbyIconsConfiguration.js"
                 }
+                ,
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationUtils",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Utils.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationDom",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Dom.js"
+                }
+                ,
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationProfile",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Profile.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationScans",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Scans.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationApi",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Api.js"
+                }
+                ,
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationDomCache",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.DomCache.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationEvents",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Events.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationDataLoader",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.DataLoader.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationUIHandlers",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.UIHandlers.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationProfileUI",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.ProfileUI.js"
+                }
+                ,
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationSettings",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Settings.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationAdvanced",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Advanced.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationIconManager",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.IconManager.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationTroubleshooter",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Troubleshooter.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationReadme",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.Readme.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationAddProfileTemplate",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.AddProfileTemplate.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "EmbyIconsConfigurationRenameProfileTemplate",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.EmbyIconsConfiguration.RenameProfileTemplate.html"
+                }
             };
         }
 
@@ -282,7 +370,6 @@ namespace EmbyIcons
             
             try
             {
-                // Cache the enhancer reference to avoid repeated property access
                 var enhancer = Enhancer;
                 
                 if (e.Item is Folder && e.Parent == _libraryManager.RootFolder)
@@ -301,7 +388,6 @@ namespace EmbyIcons
                                  ?? (e.Item as Season)?.Series
                                  ?? e.Item as Series;
 
-                // Also get the season if this is an episode change
                 var seasonToClear = (e.Item as Episode)?.Season;
 
                 if (dateModifiedChanged && e.Item is Episode episode && episode.Series != null)
@@ -310,7 +396,6 @@ namespace EmbyIcons
                         _logger.Debug($"[EmbyIcons] DateModified change detected for episode '{episode.Name}', clearing series and season caches.");
                 }
 
-                // Clear season cache if episode changed
                 if (seasonToClear != null && seasonToClear.Id != Guid.Empty)
                 {
                     if (Configuration?.EnableDebugLogging ?? false)
@@ -346,9 +431,14 @@ namespace EmbyIcons
             if (oldOptions != null)
             {
                 ConfigMonitor.CheckForChangesAndTriggerRefreshes(oldOptions, newOptions);
+                
+                if (oldOptions.EnableIconTemplateCaching != newOptions.EnableIconTemplateCaching)
+                {
+                    _logger.Info($"[EmbyIcons] Template caching setting changed to: {newOptions.EnableIconTemplateCaching}");
+                    Enhancer.EnsureTemplateCacheInitialized();
+                }
             }
 
-            // Clear all caches to ensure settings changes take effect immediately
             Enhancer.ClearAllItemDataCaches();
             IconManagerService.InvalidateCache();
             ProfileManager.InvalidateLibraryCache();
@@ -389,14 +479,26 @@ namespace EmbyIcons
                 _logger?.ErrorException("[EmbyIcons] Error unsubscribing library events.", ex);
             }
             
-            try { _pruningTimer?.Dispose(); } catch { }
-            try { _enhancer?.Dispose(); } catch (Exception ex) 
+            try { _pruningTimer?.Dispose(); } 
+            catch (Exception ex) 
             { 
-                _logger?.ErrorException("[EmbyIcons] Error disposing enhancer.", ex);
+                _logger?.Debug($"[EmbyIcons] Error disposing pruning timer: {ex.Message}");
             }
-            _enhancer = null;
             
-            try { _profileManager?.Dispose(); } catch { }
+            if (_enhancerLazy.IsValueCreated)
+            {
+                try { _enhancerLazy.Value?.Dispose(); } 
+                catch (Exception ex) 
+                { 
+                    _logger?.ErrorException("[EmbyIcons] Error disposing enhancer.", ex);
+                }
+            }
+            
+            try { _profileManager?.Dispose(); } 
+            catch (Exception ex) 
+            { 
+                _logger?.Debug($"[EmbyIcons] Error disposing profile manager: {ex.Message}");
+            }
             _profileManager = null;
             _configMonitor = null;
             Instance = null;

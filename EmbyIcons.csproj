@@ -6,9 +6,9 @@
 		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
 
-		<Version>5.40.80</Version>
-		<AssemblyVersion>5.40.8.0</AssemblyVersion>
-		<FileVersion>5.40.8.0</FileVersion>
+		<Version>5.42.0</Version>
+		<AssemblyVersion>5.42.0.0</AssemblyVersion>
+		<FileVersion>5.42.0.0</FileVersion>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -117,6 +117,23 @@
 		<EmbeddedResource Include="EmbeddedIcons\vc_vp9.png" />
 		<EmbeddedResource Include="EmbyIconsConfiguration.html" />
 		<EmbeddedResource Include="EmbyIconsConfiguration.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Utils.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Dom.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.DomCache.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Events.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.DataLoader.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.UIHandlers.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.ProfileUI.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Profile.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Scans.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Api.js" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Settings.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Advanced.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.IconManager.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Troubleshooter.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.Readme.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.AddProfileTemplate.html" />
+		<EmbeddedResource Include="Configuration\EmbyIconsConfiguration.RenameProfileTemplate.html" />
 		<EmbeddedResource Include="Images\logo.png" />
 		<EmbeddedResource Include="Images\preview.png" />
 		<EmbeddedResource Include="Images\tag.png" />
